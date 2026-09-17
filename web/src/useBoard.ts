@@ -1,6 +1,6 @@
 import { ref, shallowRef } from "vue";
 import { isFlashing, projectName } from "./format";
-import type { Aircraft, AnthropicStatus, CostSummary, HooksHealth, WsMessage } from "./types";
+import type { Aircraft, AnthropicStatus, CostSummary, HooksHealth, JiraPollStatus, JiraTicket, Todo, TodoLane, WsMessage } from "./types";
 
 /** how long a strip must stay in holding before we notify. 0 = fire immediately.
  *  (A larger value would suppress the session you're actively replying to.) */
@@ -24,6 +24,9 @@ export function useBoard(opts: { notify?: boolean } = {}) {
   const version = ref("");
   const currentBuild = ref<number | null>(null); // monotonic build number (drives "What's new")
   const update = ref<{ available: boolean; latest: { pretty: string } | null }>({ available: false, latest: null });
+  const todos = ref<Todo[]>([]);
+  const jiraTickets = ref<JiraTicket[]>([]);
+  const jiraStatus = ref<JiraPollStatus | null>(null);
 
   const notifySupported = typeof Notification !== "undefined";
   const notifyEnabled = ref(false);
@@ -155,6 +158,11 @@ export function useBoard(opts: { notify?: boolean } = {}) {
         currentBuild.value = msg.current?.build ?? null;
         update.value = { available: msg.updateAvailable, latest: msg.latest };
         maybeReloadOnNewBuild(msg.current);
+      } else if (msg.type === "todos") {
+        todos.value = msg.todos;
+      } else if (msg.type === "jira") {
+        jiraTickets.value = msg.tickets;
+        jiraStatus.value = msg.status;
       }
     };
     ws.onclose = () => {
@@ -209,6 +217,60 @@ export function useBoard(opts: { notify?: boolean } = {}) {
     setTimeout(() => (updating.value = false), 20_000);
   }
 
+  async function addTodo(text: string) {
+    await fetch("/api/todos", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+  }
+
+  /** move (or reorder within) a lane — `order` is the destination lane's full new order,
+   *  including `id` itself at its dropped position */
+  async function moveTodo(id: string, lane: TodoLane, order: string[]) {
+    await fetch(`/api/todos/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lane, order }),
+    });
+  }
+
+  async function deleteTodo(id: string) {
+    await fetch(`/api/todos/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  async function setTodoText(id: string, text: string) {
+    await fetch(`/api/todos/${encodeURIComponent(id)}/text`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+  }
+
+  async function setTodoNote(id: string, note: string) {
+    await fetch(`/api/todos/${encodeURIComponent(id)}/note`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ note }),
+    });
+  }
+
+  async function removeTodoNote(id: string) {
+    await fetch(`/api/todos/${encodeURIComponent(id)}/note`, { method: "DELETE" });
+  }
+
+  async function setTodoLink(id: string, link: string) {
+    await fetch(`/api/todos/${encodeURIComponent(id)}/link`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ link }),
+    });
+  }
+
+  async function removeTodoLink(id: string) {
+    await fetch(`/api/todos/${encodeURIComponent(id)}/link`, { method: "DELETE" });
+  }
+
   /** transient one-liner for a click that could not be routed anywhere (auto-clears) */
   const openHint = ref<string | null>(null);
   let hintTimer: ReturnType<typeof setTimeout> | null = null;
@@ -232,5 +294,5 @@ export function useBoard(opts: { notify?: boolean } = {}) {
     }
   }
 
-  return { aircraft, status, health, cost, connected, now, version, currentBuild, update, updating, applyUpdate, start, setNote, removeNote, land, unland, open, openHint, notifySupported, notifyEnabled, toggleNotify };
+  return { aircraft, status, health, cost, connected, now, version, currentBuild, update, updating, applyUpdate, start, setNote, removeNote, land, unland, open, openHint, notifySupported, notifyEnabled, toggleNotify, todos, addTodo, moveTodo, deleteTodo, setTodoText, setTodoNote, removeTodoNote, setTodoLink, removeTodoLink, jiraTickets, jiraStatus };
 }

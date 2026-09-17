@@ -8,13 +8,15 @@ import FlipCounter from "./components/FlipCounter.vue";
 import Settings from "./components/Settings.vue";
 import Help from "./components/Help.vue";
 import Whatsnew from "./components/Whatsnew.vue";
+import TodoFlightBoard from "./components/TodoFlightBoard.vue";
+import QaTickets from "./components/QaTickets.vue";
 import Clock from "./components/Clock.vue";
 import SegNumber from "./components/SegNumber.vue";
 import Clouds from "./components/Clouds.vue";
 import Helicopter from "./components/Helicopter.vue";
 import { useBoard } from "./useBoard";
 import { laneOf, isFlashing, formatUsd } from "./format";
-import type { Aircraft, LanePartition } from "./types";
+import type { Aircraft, LanePartition, TodoLane } from "./types";
 
 // Compact mode for the menu-bar popover (loaded as /?panel). Renders just the mini-board
 // and tells useBoard to stay silent (the full dashboard owns notifications).
@@ -23,7 +25,22 @@ const panel = new URLSearchParams(location.search).has("panel");
 // panel. Also silent — the full dashboard owns notifications.
 const overlay = new URLSearchParams(location.search).has("overlay");
 
-const { aircraft, status, health, cost, connected, now, version, currentBuild, update, updating, applyUpdate, start, setNote, removeNote, land, unland, open, openHint, notifySupported, notifyEnabled, toggleNotify } = useBoard({ notify: !panel && !overlay });
+const { aircraft, status, health, cost, connected, now, version, currentBuild, update, updating, applyUpdate, start, setNote, removeNote, land, unland, open, openHint, notifySupported, notifyEnabled, toggleNotify, todos, addTodo, moveTodo, deleteTodo, setTodoText, setTodoNote, removeTodoNote, setTodoLink, removeTodoLink, jiraTickets, jiraStatus } = useBoard({ notify: !panel && !overlay });
+
+// Sessions ↔ To-Dos: a top-level view switch (header tab), not a modal — the To-Do board
+// replaces the whole main area, same as Board↔List does for the session board.
+const view = ref<"sessions" | "todos">((localStorage.getItem("fc-view") as "sessions" | "todos") || "sessions");
+function setView(v: "sessions" | "todos") {
+  view.value = v;
+  localStorage.setItem("fc-view", v);
+}
+const openTodoCount = computed(() => todos.value.filter((t) => t.lane !== "landed").length);
+// same shape as the session header's counters, for the header when viewing the to-do board
+const todoCounts = computed(() => {
+  const c = { open: 0, inflight: 0, holding: 0, landed: 0 };
+  for (const t of todos.value) c[t.lane]++;
+  return c;
+});
 onMounted(start);
 
 // Cost readout: today's spend leads (it's the number that changes), the running month
@@ -214,6 +231,15 @@ function onLogoClick() {
 
 const settingsOpen = ref(false);
 const helpOpen = ref(false);
+const qaOpen = ref(false);
+function onTodoAdd(text: string) { addTodo(text); }
+function onTodoMove(id: string, lane: TodoLane, order: string[]) { moveTodo(id, lane, order); }
+function onTodoRemove(id: string) { deleteTodo(id); }
+function onTodoSetText(id: string, text: string) { setTodoText(id, text); }
+function onTodoSetNote(id: string, note: string) { setTodoNote(id, note); }
+function onTodoRemoveNote(id: string) { removeTodoNote(id); }
+function onTodoSetLink(id: string, link: string) { setTodoLink(id, link); }
+function onTodoRemoveLink(id: string) { removeTodoLink(id); }
 // Open Help automatically on each visit until the user has closed it once (full board only).
 function closeHelp() {
   helpOpen.value = false;
@@ -417,27 +443,43 @@ function onOpen(id: string) { open(id); }
         <span class="name"><span class="w1">Session</span><span class="w2">Controller</span></span>
         <span v-if="isDev" class="dev-badge" title="Development build (Vite dev server) — not the installed app">DEV</span>
       </div>
+      <div class="view-tabs">
+        <button class="view-tab" :class="{ on: view === 'sessions' }" @click="setView('sessions')"><i class="ti ti-plane"></i> Sessions</button>
+        <button class="view-tab" :class="{ on: view === 'todos' }" @click="setView('todos')">
+          <i class="ti ti-checklist"></i> To-Dos
+          <span v-if="openTodoCount" class="view-tab-badge">{{ openTodoCount }}</span>
+        </button>
+      </div>
       <div class="stats">
-        <span class="stat"><FlipCounter :value="holding.length" color="var(--amber)" /> holding</span>
-        <span class="stat"><FlipCounter :value="inflight.length" color="var(--green)" /> in-flight</span>
-        <span v-if="parked.length" class="stat"><FlipCounter :value="parked.length" color="var(--parked)" /> parked</span>
-        <span v-if="mia.length" class="stat"><FlipCounter :value="mia.length" color="var(--gray)" /> mia</span>
-        <span v-if="landed.length" class="stat"><FlipCounter :value="landed.length" color="#4cc38a" /> landed</span>
-        <span v-if="cost" class="hdr-div" aria-hidden="true"></span>
-        <span v-if="cost" class="stat cost" :class="{ 'cost-partial': !cost.scanned || cost.unpricedSessions > 0 }" :data-tip="costTip">
-          <span class="rmp">
-            <span class="rmp-field">
-              <span class="rmp-cap">TODAY</span>
-              <span class="rmp-window"><SegNumber :value="segToday" /><span class="rmp-cur">$</span></span>
+        <template v-if="view === 'sessions'">
+          <span class="stat"><FlipCounter :value="holding.length" color="var(--amber)" /> holding</span>
+          <span class="stat"><FlipCounter :value="inflight.length" color="var(--green)" /> in-flight</span>
+          <span v-if="parked.length" class="stat"><FlipCounter :value="parked.length" color="var(--parked)" /> parked</span>
+          <span v-if="mia.length" class="stat"><FlipCounter :value="mia.length" color="var(--gray)" /> mia</span>
+          <span v-if="landed.length" class="stat"><FlipCounter :value="landed.length" color="#4cc38a" /> landed</span>
+          <span v-if="cost" class="hdr-div" aria-hidden="true"></span>
+          <span v-if="cost" class="stat cost" :class="{ 'cost-partial': !cost.scanned || cost.unpricedSessions > 0 }" :data-tip="costTip">
+            <span class="rmp">
+              <span class="rmp-field">
+                <span class="rmp-cap">TODAY</span>
+                <span class="rmp-window"><SegNumber :value="segToday" /><span class="rmp-cur">$</span></span>
+              </span>
+              <span class="rmp-field">
+                <span class="rmp-cap">MONTH</span>
+                <span class="rmp-window"><SegNumber :value="segMonth" /><span class="rmp-cur">$</span></span>
+              </span>
+              <span v-if="!cost.scanned || cost.unpricedSessions > 0" class="cost-approx">*</span>
             </span>
-            <span class="rmp-field">
-              <span class="rmp-cap">MONTH</span>
-              <span class="rmp-window"><SegNumber :value="segMonth" /><span class="rmp-cur">$</span></span>
-            </span>
-            <span v-if="!cost.scanned || cost.unpricedSessions > 0" class="cost-approx">*</span>
           </span>
-        </span>
-        <span class="hdr-div" aria-hidden="true"></span>
+          <span class="hdr-div" aria-hidden="true"></span>
+        </template>
+        <template v-else>
+          <span class="stat"><FlipCounter :value="todoCounts.open" color="var(--gray)" /> taxiing</span>
+          <span class="stat"><FlipCounter :value="todoCounts.inflight" color="var(--green)" /> in-flight</span>
+          <span class="stat"><FlipCounter :value="todoCounts.holding" color="var(--amber)" /> holding</span>
+          <span v-if="todoCounts.landed" class="stat"><FlipCounter :value="todoCounts.landed" color="#4cc38a" /> landed</span>
+          <span class="hdr-div" aria-hidden="true"></span>
+        </template>
         <button class="bell wn-btn" data-tip="WHAT'S NEW" aria-label="What's new" @click="whatsnewOpen = true">
           <i class="ti ti-sparkles"></i>
           <span v-if="hasUnseen" class="wn-dot"></span>
@@ -453,6 +495,9 @@ function onOpen(id: string) { open(id); }
         >
           <svg class="coffee-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="m20.216 6.415-.132-.666c-.119-.598-.388-1.163-1.001-1.379-.197-.069-.42-.098-.57-.241-.152-.143-.196-.366-.231-.572-.065-.378-.125-.756-.192-1.133-.057-.325-.102-.69-.25-.987-.195-.4-.597-.634-.996-.788a5.723 5.723 0 0 0-.626-.194c-1-.263-2.05-.36-3.077-.416a25.834 25.834 0 0 0-3.7.062c-.915.083-1.88.184-2.75.5-.318.116-.646.256-.888.501-.297.302-.393.77-.177 1.146.154.267.415.456.692.58.36.162.737.284 1.123.366 1.075.238 2.189.331 3.287.37 1.218.05 2.437.01 3.65-.118.299-.033.598-.073.896-.119.352-.054.578-.513.474-.834-.124-.383-.457-.531-.834-.473-.466.074-.96.108-1.382.146-1.177.08-2.358.082-3.536.006a22.228 22.228 0 0 1-1.157-.107c-.086-.01-.18-.025-.258-.036-.243-.036-.484-.08-.724-.13-.111-.027-.111-.185 0-.212h.005c.277-.06.557-.108.838-.147h.002c.131-.009.263-.032.394-.048a25.076 25.076 0 0 1 3.426-.12c.674.019 1.347.067 2.017.144l.228.031c.267.04.533.088.798.145.392.085.895.113 1.07.542.055.137.08.288.111.431l.319 1.484a.237.237 0 0 1-.199.284h-.003c-.037.006-.075.01-.112.015a36.704 36.704 0 0 1-4.743.295 37.059 37.059 0 0 1-4.699-.304c-.14-.017-.293-.042-.417-.06-.326-.048-.649-.108-.973-.161-.393-.065-.768-.032-1.123.161-.29.16-.527.404-.675.701-.154.316-.199.66-.267 1-.069.34-.176.707-.135 1.056.087.753.613 1.365 1.37 1.502a39.69 39.69 0 0 0 11.343.376.483.483 0 0 1 .535.53l-.071.697-1.018 9.907c-.041.41-.047.832-.125 1.237-.122.637-.553 1.028-1.182 1.171-.577.131-1.165.2-1.756.205-.656.004-1.31-.025-1.966-.022-.699.004-1.556-.06-2.095-.58-.475-.458-.54-1.174-.605-1.793l-.731-7.013-.322-3.094c-.037-.351-.286-.695-.678-.678-.336.015-.718.3-.678.679l.228 2.185.949 9.112c.147 1.344 1.174 2.068 2.446 2.272.742.12 1.503.144 2.257.156.966.016 1.942.053 2.892-.122 1.408-.258 2.465-1.198 2.616-2.657.34-3.332.683-6.663 1.024-9.995l.215-2.087a.484.484 0 0 1 .39-.426c.402-.078.787-.212 1.074-.518.455-.488.546-1.124.385-1.766zm-1.478.772c-.145.137-.363.201-.578.233-2.416.359-4.866.54-7.308.46-1.748-.06-3.477-.254-5.207-.498-.17-.024-.353-.055-.47-.18-.22-.236-.111-.71-.054-.995.052-.26.152-.609.463-.646.484-.057 1.046.148 1.526.22.577.088 1.156.159 1.737.212 2.48.226 5.002.19 7.472-.14.45-.06.899-.13 1.345-.21.399-.072.84-.206 1.08.206.166.281.188.657.162.974a.544.544 0 0 1-.169.364zm-6.159 3.9c-.862.37-1.84.788-3.109.788a5.884 5.884 0 0 1-1.569-.217l.877 9.004c.065.78.717 1.38 1.5 1.38 0 0 1.243.065 1.658.065.447 0 1.786-.065 1.786-.065.783 0 1.434-.6 1.499-1.38l.94-9.95a3.996 3.996 0 0 0-1.322-.238c-.826 0-1.491.284-2.26.613z"/></svg>
         </a>
+        <button class="bell" data-tip="QA-TICKETS" aria-label="QA-Tickets" @click="qaOpen = true">
+          <i class="ti ti-bug"></i>
+        </button>
         <button class="bell" data-tip="SETTINGS" aria-label="Settings" @click="settingsOpen = true">
           <i class="ti ti-settings"></i>
         </button>
@@ -464,68 +509,84 @@ function onOpen(id: string) { open(id); }
       </div>
     </header>
 
-    <FlightBoard
-      v-if="flight"
-      :lanes="lanes"
-      :now="now"
-      :debug="debug"
-      @set-note="onSet"
-      @remove-note="onRemove"
-      @land="onLand"
-      @unland="onUnland"
-      @open="onOpen"
-      @dbg-cycle="onDbgCycle"
-      @dbg-step="onDbgStep"
-      @dbg-shuffle="onDbgShuffle"
-      @dbg-reset="onDbgReset"
-    />
+    <template v-if="view === 'sessions'">
+      <FlightBoard
+        v-if="flight"
+        :lanes="lanes"
+        :now="now"
+        :debug="debug"
+        @set-note="onSet"
+        @remove-note="onRemove"
+        @land="onLand"
+        @unland="onUnland"
+        @open="onOpen"
+        @dbg-cycle="onDbgCycle"
+        @dbg-step="onDbgStep"
+        @dbg-shuffle="onDbgShuffle"
+        @dbg-reset="onDbgReset"
+      />
 
-    <div v-if="!flight" class="board">
-      <!-- LEFT RAIL: MIA — every quiet, non-landed session (lost contact / dormant / done-ish) -->
-      <aside v-if="mia.length" class="mia-rail">
-        <div class="rail-h"><i class="ti ti-clock"></i> MIA — lost contact <span class="n">{{ mia.length }}</span></div>
-        <div v-fade class="rail-stack">
-          <Strip v-for="a in mia" :key="a.id" :aircraft="a" :now="now" @set-note="onSet" @remove-note="onRemove" @land="onLand" @unland="onUnland" @open="onOpen" />
-        </div>
-      </aside>
-
-      <div class="main">
-        <div class="band-h"><i class="ti ti-plane-inflight"></i>In-flight <span class="n">{{ inflight.length }}</span></div>
-        <div v-fade class="band inflight-band">
-          <Strip v-for="a in inflight" :key="a.id" :aircraft="a" :now="now" @set-note="onSet" @remove-note="onRemove" @land="onLand" @unland="onUnland" @open="onOpen" />
-          <div v-if="!inflight.length" class="empty">no active sessions</div>
-        </div>
-
-        <!-- flexible middle: holding / parked absorb the height and scroll internally -->
-        <div class="lanes">
-          <section class="lane holding-lane">
-            <div class="lane-h"><i class="ti ti-circle-filled" style="color: var(--amber)"></i>Holding <span class="n">{{ holding.length }}</span></div>
-            <div v-fade class="stack">
-              <Strip v-for="a in holding" :key="a.id" :aircraft="a" :now="now" @set-note="onSet" @remove-note="onRemove" @land="onLand" @unland="onUnland" @open="onOpen" />
-              <div v-if="!holding.length" class="empty">clear</div>
-            </div>
-          </section>
-
-          <section class="lane">
-            <div class="lane-h"><i class="ti ti-circle-filled" style="color: var(--parked)"></i>Parked <span class="n">{{ parked.length }}</span></div>
-            <div v-fade class="stack">
-              <Strip v-for="a in parked" :key="a.id" :aircraft="a" :now="now" @set-note="onSet" @remove-note="onRemove" @land="onLand" @unland="onUnland" @open="onOpen" />
-              <div v-if="!parked.length" class="empty">clear</div>
-            </div>
-          </section>
-        </div>
-
-        <!-- LANDED: one row of recent landings (older than 7 days are hidden) -->
-        <div v-if="landed.length" class="landed-region">
-          <div class="band-h landed-h">
-            <i class="ti ti-plane-arrival"></i>Landed <span class="n">{{ landed.length }}</span>
+      <div v-if="!flight" class="board">
+        <!-- LEFT RAIL: MIA — every quiet, non-landed session (lost contact / dormant / done-ish) -->
+        <aside v-if="mia.length" class="mia-rail">
+          <div class="rail-h"><i class="ti ti-clock"></i> MIA — lost contact <span class="n">{{ mia.length }}</span></div>
+          <div v-fade class="rail-stack">
+            <Strip v-for="a in mia" :key="a.id" :aircraft="a" :now="now" @set-note="onSet" @remove-note="onRemove" @land="onLand" @unland="onUnland" @open="onOpen" />
           </div>
-          <div v-fade class="band landed-band" @wheel="onLandedWheel">
-            <Strip v-for="a in landed" :key="a.id" :aircraft="a" :now="now" @set-note="onSet" @remove-note="onRemove" @land="onLand" @unland="onUnland" @open="onOpen" />
+        </aside>
+
+        <div class="main">
+          <div class="band-h"><i class="ti ti-plane-inflight"></i>In-flight <span class="n">{{ inflight.length }}</span></div>
+          <div v-fade class="band inflight-band">
+            <Strip v-for="a in inflight" :key="a.id" :aircraft="a" :now="now" @set-note="onSet" @remove-note="onRemove" @land="onLand" @unland="onUnland" @open="onOpen" />
+            <div v-if="!inflight.length" class="empty">no active sessions</div>
+          </div>
+
+          <!-- flexible middle: holding / parked absorb the height and scroll internally -->
+          <div class="lanes">
+            <section class="lane holding-lane">
+              <div class="lane-h"><i class="ti ti-circle-filled" style="color: var(--amber)"></i>Holding <span class="n">{{ holding.length }}</span></div>
+              <div v-fade class="stack">
+                <Strip v-for="a in holding" :key="a.id" :aircraft="a" :now="now" @set-note="onSet" @remove-note="onRemove" @land="onLand" @unland="onUnland" @open="onOpen" />
+                <div v-if="!holding.length" class="empty">clear</div>
+              </div>
+            </section>
+
+            <section class="lane">
+              <div class="lane-h"><i class="ti ti-circle-filled" style="color: var(--parked)"></i>Parked <span class="n">{{ parked.length }}</span></div>
+              <div v-fade class="stack">
+                <Strip v-for="a in parked" :key="a.id" :aircraft="a" :now="now" @set-note="onSet" @remove-note="onRemove" @land="onLand" @unland="onUnland" @open="onOpen" />
+                <div v-if="!parked.length" class="empty">clear</div>
+              </div>
+            </section>
+          </div>
+
+          <!-- LANDED: one row of recent landings (older than 7 days are hidden) -->
+          <div v-if="landed.length" class="landed-region">
+            <div class="band-h landed-h">
+              <i class="ti ti-plane-arrival"></i>Landed <span class="n">{{ landed.length }}</span>
+            </div>
+            <div v-fade class="band landed-band" @wheel="onLandedWheel">
+              <Strip v-for="a in landed" :key="a.id" :aircraft="a" :now="now" @set-note="onSet" @remove-note="onRemove" @land="onLand" @unland="onUnland" @open="onOpen" />
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    </template>
+
+    <TodoFlightBoard
+      v-else
+      :todos="todos"
+      :now="now"
+      @add="onTodoAdd"
+      @move="onTodoMove"
+      @remove="onTodoRemove"
+      @set-text="onTodoSetText"
+      @set-note="onTodoSetNote"
+      @remove-note="onTodoRemoveNote"
+      @set-link="onTodoSetLink"
+      @remove-link="onTodoRemoveLink"
+    />
 
     <Settings
       v-if="settingsOpen"
@@ -539,6 +600,7 @@ function onOpen(id: string) { open(id); }
     />
     <Help v-if="helpOpen" @close="closeHelp" />
     <Whatsnew v-if="whatsnewOpen" :since-build="seenBuild" @close="closeWhatsnew" />
+    <QaTickets v-if="qaOpen" :tickets="jiraTickets" :status="jiraStatus" :now="now" @close="qaOpen = false" />
     <div v-if="version" class="version-tag">{{ version }}</div>
     <Clouds v-if="cloudsMounted" :active="cloudsOn" @faded="cloudsMounted = false" />
     <Helicopter v-if="heliOn" />
@@ -583,7 +645,11 @@ function onOpen(id: string) { open(id); }
 .stat.cost-partial { opacity: 0.75; }
 .cost-approx { margin-left: 1px; opacity: 0.7; }
 
-header { flex: none; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border-soft); }
+/* justify-content: flex-start (not space-between) — with 3 children, space-between would
+   float .view-tabs' position based on how wide .stats happens to be, which differs between
+   the Sessions and To-Dos headers and made the tabs visibly jump on switch. .stats instead
+   pushes itself flush right via margin-left: auto, so brand + tabs stay put regardless. */
+header { flex: none; display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border-soft); }
 .brand { display: flex; align-items: center; gap: 9px; }
 .brand-logo { width: 26px; height: 26px; display: block; }
 /* only rendered under the Vite dev server (pnpm ui / dev:live) — flags a non-installed board */
@@ -598,7 +664,7 @@ header { flex: none; display: flex; align-items: center; justify-content: space-
 .name { display: inline-flex; align-items: baseline; gap: 0.5em; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; text-transform: uppercase; font-size: 15px; line-height: 1; }
 .name .w1 { font-weight: 300; letter-spacing: 0.34em; color: var(--text-dim); }
 .name .w2 { font-weight: 700; letter-spacing: 0.34em; color: var(--text-hi); }
-.stats { display: flex; align-items: center; gap: 14px; font-size: 12px; color: var(--text-dim); }
+.stats { margin-left: auto; display: flex; align-items: center; gap: 14px; font-size: 12px; color: var(--text-dim); }
 .stats b { font-weight: 500; }
 .hdr-div { width: 1px; height: 15px; background: var(--border); flex: none; }
 .stat { display: inline-flex; align-items: center; gap: 6px; }
@@ -642,6 +708,13 @@ header { flex: none; display: flex; align-items: center; justify-content: space-
 /* help "?" is text, not a glyph — the font lacks a plain question mark, and the circled
    variants render the mark too small to read at this size */
 .help-btn { font-size: 15px; font-weight: 700; line-height: 1; width: 20px; justify-content: center; }
+
+/* Sessions ↔ To-Dos header tabs — a full view switch, not a modal */
+.view-tabs { display: inline-flex; border: 0.5px solid var(--border); border-radius: 8px; overflow: hidden; margin-left: 14px; }
+.view-tab { all: unset; cursor: pointer; position: relative; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 6px 12px; color: var(--text-faint); }
+.view-tab:hover { color: var(--text-dim); }
+.view-tab.on { background: var(--chip); color: var(--text-hi); }
+.view-tab-badge { font-size: 10px; font-weight: 600; color: var(--bg); background: var(--amber); border-radius: 999px; padding: 1px 6px; line-height: 1.4; }
 
 /* board: MIA rail on the left, everything else in the main column */
 .board { flex: 1; min-height: 0; display: flex; gap: 12px; padding-top: 12px; }

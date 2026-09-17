@@ -138,6 +138,58 @@ export interface HooksHealth {
   checkedAt: number;
 }
 
+/** a personal to-do board, laned like the session board itself */
+export type TodoLane = "open" | "inflight" | "holding" | "landed";
+
+/** a free-text to-do card — not tied to any session/aircraft. `position` orders cards
+ *  within their lane (ascending). */
+export interface Todo {
+  id: string;
+  text: string;
+  lane: TodoLane;
+  position: number;
+  createdAt: number;
+  landedAt: number | null;
+  note: string | null;
+  /** an http(s) link (Jira/Confluence/Slack thread/…) shown as a clickable chip */
+  link: string | null;
+}
+
+/** Jira connection settings as the browser sees them — the API token itself never arrives
+ *  here, only whether one is stored (see Store.getJiraConfig on the backend). `jql` is the
+ *  query currently being polled — pasted freely, no project/status picker. */
+export interface JiraConfig {
+  baseUrl: string;
+  email: string;
+  hasToken: boolean;
+  jql: string;
+}
+
+/** a saved JQL preset — just a name shortcut onto JiraConfig.jql */
+export interface JiraView {
+  id: string;
+  name: string;
+  jql: string;
+  createdAt: number;
+}
+
+/** one row of the current JQL's results */
+export interface JiraTicket {
+  key: string;
+  summary: string;
+  status: string;
+  assignee: string | null;
+  url: string;
+  /** Jira's own `updated` field — drives the "Xd since update" display */
+  updatedAt: number;
+}
+
+export interface JiraPollStatus {
+  ok: boolean;
+  error: string | null;
+  checkedAt: number | null;
+}
+
 export type WsMessage =
   | { type: "snapshot" | "update"; ts: number; aircraft: Aircraft[] }
   | { type: "status"; ts: number; status: AnthropicStatus | null }
@@ -149,4 +201,6 @@ export type WsMessage =
       current: { build: number | null; sha: string; pretty: string };
       updateAvailable: boolean;
       latest: { build: number | null; sha: string; pretty: string } | null;
-    };
+    }
+  | { type: "todos"; ts: number; todos: Todo[] }
+  | { type: "jira"; ts: number; tickets: JiraTicket[]; status: JiraPollStatus };

@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { useEscClose } from "../useEscClose";
 
 const props = defineProps<{ aircraftId: string; title: string; port: number | null; kind?: "server" | "install" }>();
 const emit = defineEmits<{ close: [] }>();
+useEscClose(() => emit("close"));
 
 const qs = props.kind === "install" ? "?kind=install" : "";
 

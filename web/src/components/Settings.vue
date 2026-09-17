@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { devUrl } from "../format";
+import { useEscClose } from "../useEscClose";
 
 interface Cfg {
   urlTemplate: string;
@@ -16,6 +17,7 @@ interface RepoRow extends Cfg {
 const GLOBAL_KEY = "__global__";
 defineProps<{ flight: boolean; notifySupported: boolean; notifyEnabled: boolean; version?: string }>();
 const emit = defineEmits<{ close: []; toggleFlight: []; toggleNotify: [] }>();
+useEscClose(() => emit("close"));
 
 // App controls (moved out of the native menu). These queue a command the menu-bar app runs
 // on its ~1s poll; overlay state is read back so the toggle reflects reality.
@@ -90,6 +92,40 @@ const globals = ref<Cfg>({ urlTemplate: "", command: "", install: "", env: "" })
 const loading = ref(true);
 const savedKey = ref<string | null>(null);
 let savedTimer: ReturnType<typeof setTimeout> | undefined;
+
+// Jira connection (for the QA-tickets panel) — a single global connection, not per-repo.
+// The API token is a password field: the server never sends the real value back, only
+// `hasToken`, so an empty field on save means "keep the token already on file".
+interface JiraCfg { baseUrl: string; email: string; hasToken: boolean }
+const jira = ref<JiraCfg & { apiToken: string }>({ baseUrl: "", email: "", hasToken: false, apiToken: "" });
+const jiraLoading = ref(true);
+
+onMounted(async () => {
+  try {
+    const res = await fetch("/api/jira/config");
+    jira.value = { ...((await res.json()) as JiraCfg), apiToken: "" };
+  } catch {
+    /* leave defaults */
+  } finally {
+    jiraLoading.value = false;
+  }
+});
+
+async function saveJira() {
+  const res = await fetch("/api/jira/config", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      baseUrl: jira.value.baseUrl.trim(),
+      email: jira.value.email.trim(),
+      apiToken: jira.value.apiToken.trim() || undefined,
+    }),
+  });
+  jira.value = { ...((await res.json()) as JiraCfg), apiToken: "" };
+  savedKey.value = "jira";
+  clearTimeout(savedTimer);
+  savedTimer = setTimeout(() => (savedKey.value = null), 1500);
+}
 
 onMounted(async () => {
   try {
@@ -185,6 +221,38 @@ const saveGlobal = () => put(GLOBAL_KEY, null, globals.value);
         <div v-if="version" class="s-pref">
           <span class="s-plabel">Version</span>
           <span class="s-ver">{{ version }}</span>
+        </div>
+      </div>
+
+      <div class="s-sep">jira</div>
+      <p class="s-note">
+        Für das QA-Ticket-Panel: E-Mail + ein eigener
+        <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noreferrer">Atlassian-API-Token</a>.
+        Wird lokal gespeichert (nie an den Browser zurückgegeben).
+      </p>
+      <div v-if="jiraLoading" class="s-empty">loading…</div>
+      <div v-else class="s-jira">
+        <label class="s-field">
+          <span class="s-label">Base-URL</span>
+          <input v-model="jira.baseUrl" class="s-input" placeholder="https://myposter.atlassian.net" spellcheck="false" />
+        </label>
+        <label class="s-field">
+          <span class="s-label">E-Mail</span>
+          <input v-model="jira.email" class="s-input" placeholder="du@firma.de" spellcheck="false" />
+        </label>
+        <label class="s-field">
+          <span class="s-label">API-Token</span>
+          <input
+            v-model="jira.apiToken"
+            type="password"
+            class="s-input"
+            :placeholder="jira.hasToken ? '•••• gespeichert — leer lassen zum Beibehalten' : 'Token einfügen'"
+            spellcheck="false"
+          />
+        </label>
+        <div class="s-jira-actions">
+          <button class="s-btn" @click="saveJira"><i class="ti ti-device-floppy"></i> Speichern</button>
+          <span class="s-saved" :class="{ show: savedKey === 'jira' }"><i class="ti ti-check"></i> saved</span>
         </div>
       </div>
 
@@ -302,5 +370,7 @@ const saveGlobal = () => put(GLOBAL_KEY, null, globals.value);
 .s-preview { font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace; font-size: 10px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .s-saved { font-size: 11px; color: var(--green); opacity: 0; transition: opacity 0.15s; white-space: nowrap; display: inline-flex; align-items: center; gap: 3px; padding-top: 4px; }
 .s-saved.show { opacity: 1; }
+.s-jira { display: flex; flex-direction: column; gap: 10px; padding: 4px 8px 12px; }
+.s-jira-actions { display: flex; align-items: center; gap: 10px; }
 @media (max-width: 640px) { .s-row { grid-template-columns: 1fr; gap: 6px; } }
 </style>

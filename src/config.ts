@@ -90,6 +90,9 @@ export const CONFIG = {
    *  live sessions keep their own cost current between runs. */
   costScanMs: 60 * 60_000,
 
+  /** how often to poll Jira for the QA-status ticket panel */
+  jiraPollMs: 5 * 60_000,
+
   /** Claude/Anthropic service status (Statuspage) — drives the top status banner */
   statusSummaryUrl: process.env.CLAUDE_STATUS_URL ?? "https://status.claude.com/api/v2/summary.json",
   statusPageUrl: "https://status.claude.com",

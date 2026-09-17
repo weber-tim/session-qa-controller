@@ -176,6 +176,56 @@ export interface SessionFacts {
   continuedFrom?: string | null;
 }
 
+/** a personal to-do board, styled and laned like the session board itself:
+ *  open (backlog) → inflight (working it) → holding (blocked on someone else) → landed (done) */
+export type TodoLane = "open" | "inflight" | "holding" | "landed";
+
+/** a free-text to-do card, not tied to any session/aircraft. `position` orders cards
+ *  within their lane (ascending); a move/reorder rewrites every position in the affected
+ *  lane in one go (see Store.moveTodo) rather than tracking fractional positions. */
+export interface Todo {
+  id: string;
+  text: string;
+  lane: TodoLane;
+  position: number;
+  createdAt: number;
+  /** when this card last entered "landed" — cleared if it's moved back out */
+  landedAt: number | null;
+  /** user-supplied note, same role as an aircraft's note (Strip.vue's "+ note") */
+  note: string | null;
+  /** an http(s) link (Jira/Confluence/Slack thread/…) shown as a clickable chip */
+  link: string | null;
+}
+
+/** Jira connection settings (server-held). The API token is never sent to the browser —
+ *  `hasToken` reports whether one is stored, without revealing it. `jql` is the query
+ *  currently being polled — free-form, pasted by the user (see JiraView for named presets). */
+export interface JiraConfig {
+  baseUrl: string;
+  email: string;
+  hasToken: boolean;
+  jql: string;
+}
+
+/** a saved JQL preset — just a name shortcut onto JiraConfig.jql, nothing more */
+export interface JiraView {
+  id: string;
+  name: string;
+  jql: string;
+  createdAt: number;
+}
+
+/** one row of a JQL search result */
+export interface JiraTicket {
+  key: string;
+  summary: string;
+  status: string;
+  assignee: string | null;
+  url: string;
+  /** Jira's own `updated` field — drives the "Xd since update" display */
+  updatedAt: number;
+}
+
 export interface DiscoveredSession {
   /** sessionId (or filename stem as fallback) */
   id: string;

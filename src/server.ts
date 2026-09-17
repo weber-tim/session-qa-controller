@@ -12,8 +12,9 @@ import { type HookSettings, assembleHealth, readHookSettings } from "./hooksHeal
 import { detectSessionHost, openAircraft } from "./open.js";
 import { startStatusPolling } from "./status.js";
 import { scanCosts } from "./costScan.js";
+import { fetchTickets } from "./jira.js";
 import { Store } from "./store.js";
-import type { ActivityState, AnthropicStatus, CostSummary, DevServerInfo, DiscoveredSession, HooksHealth } from "./types.js";
+import type { ActivityState, AnthropicStatus, CostSummary, DevServerInfo, DiscoveredSession, HooksHealth, JiraTicket } from "./types.js";
 import { type UpdateStatus, checkForUpdate, getVersion } from "./version.js";
 import { readChangelog } from "./changelog.js";
 
@@ -205,6 +206,121 @@ async function main(): Promise<void> {
   refreshCost();
   runCostScan();
   const costScanTimer = setInterval(runCostScan, CONFIG.costScanMs);
+
+  // ---- to-do list ---------------------------------------------------------------
+  // A free-text personal backlog, unrelated to any session/aircraft — its own flight
+  // board (see web/src/components/TodoFlightBoard.vue) — so every change broadcasts
+  // immediately over the same WS channel.
+  const todosMsg = () => ({ type: "todos", ts: Date.now(), todos: store.getTodos() });
+
+  app.get("/api/todos", async () => store.getTodos());
+  app.post<{ Body: { text?: string } }>("/api/todos", async (req, reply) => {
+    const text = (req.body?.text ?? "").trim();
+    if (!text) return reply.code(400).send({ error: "text required" });
+    const todo = store.addTodo(text);
+    broadcast(todosMsg());
+    return todo;
+  });
+  const TODO_LANES = new Set(["open", "inflight", "holding", "landed"]);
+  app.patch<{ Params: { id: string }; Body: { lane?: string; order?: string[] } }>("/api/todos/:id", async (req, reply) => {
+    const lane = req.body?.lane;
+    const order = req.body?.order;
+    if (!lane || !TODO_LANES.has(lane) || !Array.isArray(order)) return reply.code(400).send({ error: "lane + order required" });
+    store.moveTodo(req.params.id, lane as "open" | "inflight" | "holding" | "landed", order);
+    broadcast(todosMsg());
+    return { ok: true };
+  });
+  app.delete<{ Params: { id: string } }>("/api/todos/:id", async (req) => {
+    store.deleteTodo(req.params.id);
+    broadcast(todosMsg());
+    return { ok: true };
+  });
+  app.put<{ Params: { id: string }; Body: { text?: string } }>("/api/todos/:id/text", async (req, reply) => {
+    const text = (req.body?.text ?? "").trim();
+    if (!text) return reply.code(400).send({ error: "text required" });
+    store.setTodoText(req.params.id, text);
+    broadcast(todosMsg());
+    return { ok: true };
+  });
+  app.put<{ Params: { id: string }; Body: { note?: string } }>("/api/todos/:id/note", async (req, reply) => {
+    const note = (req.body?.note ?? "").trim();
+    if (!note) return reply.code(400).send({ error: "note required" });
+    store.setTodoNote(req.params.id, note);
+    broadcast(todosMsg());
+    return { ok: true };
+  });
+  app.delete<{ Params: { id: string } }>("/api/todos/:id/note", async (req) => {
+    store.deleteTodoNote(req.params.id);
+    broadcast(todosMsg());
+    return { ok: true };
+  });
+  app.put<{ Params: { id: string }; Body: { link?: string } }>("/api/todos/:id/link", async (req, reply) => {
+    const link = (req.body?.link ?? "").trim();
+    // only ever rendered as a clickable <a href>, so reject anything but a real http(s) URL
+    // (e.g. a javascript: URI) rather than storing it and trusting the value at render time
+    if (!/^https?:\/\//i.test(link)) return reply.code(400).send({ error: "must be an http(s) URL" });
+    store.setTodoLink(req.params.id, link);
+    broadcast(todosMsg());
+    return { ok: true };
+  });
+  app.delete<{ Params: { id: string } }>("/api/todos/:id/link", async (req) => {
+    store.deleteTodoLink(req.params.id);
+    broadcast(todosMsg());
+    return { ok: true };
+  });
+
+  // ---- Jira ticket panel ----------------------------------------------------------
+  // Polls Jira directly (own credentials — this process has no relation to any Claude
+  // Code / MCP session) with whatever JQL is currently configured — pasted freely by the
+  // user, no project/status picker. Not configured yet is NOT an error state; a real
+  // fetch failure is.
+  let jiraTickets: JiraTicket[] = store.getJiraTickets();
+  let jiraStatus: { ok: boolean; error: string | null; checkedAt: number | null } = { ok: true, error: null, checkedAt: null };
+  const jiraMsg = () => ({ type: "jira", ts: Date.now(), tickets: jiraTickets, status: jiraStatus });
+  const runJiraPoll = async (): Promise<void> => {
+    const cfg = store.getJiraConfigInternal();
+    if (!cfg || !cfg.baseUrl || !cfg.email || !cfg.apiToken || !cfg.jql.trim()) {
+      jiraStatus = { ok: true, error: null, checkedAt: Date.now() };
+      return;
+    }
+    try {
+      const tickets = await fetchTickets(cfg, cfg.jql);
+      store.replaceJiraTickets(tickets);
+      jiraTickets = store.getJiraTickets();
+      jiraStatus = { ok: true, error: null, checkedAt: Date.now() };
+    } catch (err) {
+      jiraStatus = { ok: false, error: err instanceof Error ? err.message : String(err), checkedAt: Date.now() };
+    }
+    broadcast(jiraMsg());
+  };
+  void runJiraPoll();
+  const jiraTimer = setInterval(() => void runJiraPoll(), CONFIG.jiraPollMs);
+
+  app.get("/api/jira/config", async () => store.getJiraConfig() ?? { baseUrl: "", email: "", hasToken: false, jql: "" });
+  app.put<{ Body: { baseUrl?: string; email?: string; apiToken?: string; jql?: string } }>("/api/jira/config", async (req) => {
+    const b = req.body ?? {};
+    store.setJiraConfig({
+      baseUrl: b.baseUrl != null ? b.baseUrl.trim().replace(/\/+$/, "") : undefined,
+      email: b.email != null ? b.email.trim() : undefined,
+      apiToken: b.apiToken?.trim(),
+      jql: b.jql != null ? b.jql.trim() : undefined,
+    });
+    void runJiraPoll(); // reflect a config change immediately, don't wait for the next interval
+    return store.getJiraConfig();
+  });
+  app.get("/api/jira/tickets", async () => ({ tickets: jiraTickets, status: jiraStatus }));
+
+  app.get("/api/jira/views", async () => store.getJiraViews());
+  app.post<{ Body: { name?: string; jql?: string } }>("/api/jira/views", async (req, reply) => {
+    const name = (req.body?.name ?? "").trim();
+    const jql = (req.body?.jql ?? "").trim();
+    if (!name || !jql) return reply.code(400).send({ error: "name + jql required" });
+    return store.addJiraView(name, jql);
+  });
+  app.delete<{ Params: { id: string } }>("/api/jira/views/:id", async (req) => {
+    store.deleteJiraView(req.params.id);
+    return { ok: true };
+  });
 
   // Claude/Anthropic service status → top banner
   let anthropicStatus: AnthropicStatus | null = null;
@@ -659,6 +775,8 @@ async function main(): Promise<void> {
     socket.send(JSON.stringify({ type: "health", ts: Date.now(), health: hooksHealth }));
     socket.send(JSON.stringify(costMsg()));
     socket.send(JSON.stringify(versionMsg()));
+    socket.send(JSON.stringify(todosMsg()));
+    socket.send(JSON.stringify(jiraMsg()));
     socket.on("close", () => clients.delete(socket));
     socket.on("error", () => clients.delete(socket));
   });
@@ -679,7 +797,7 @@ async function main(): Promise<void> {
   process.stdout.write(
     `\n  ✈  Feature Controller on http://${CONFIG.apiHost}:${CONFIG.apiPort}\n` +
       ui +
-      `  REST  /api/health  /api/aircraft  /api/aircraft/:id  /api/summary  /api/cost\n` +
+      `  REST  /api/health  /api/aircraft  /api/aircraft/:id  /api/summary  /api/cost  /api/todos  /api/jira/tickets\n` +
       `  WS    /ws  (snapshot + live updates)\n\n`,
   );
 
@@ -689,6 +807,7 @@ async function main(): Promise<void> {
     clearInterval(devTimer);
     clearInterval(updateTimer);
     clearInterval(costScanTimer);
+    clearInterval(jiraTimer);
     await engine.stop();
     await app.close();
     store.close();

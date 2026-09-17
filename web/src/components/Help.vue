@@ -1,5 +1,8 @@
 <script setup lang="ts">
-defineEmits<{ close: [] }>();
+import { useEscClose } from "../useEscClose";
+
+const emit = defineEmits<{ close: [] }>();
+useEscClose(() => emit("close"));
 
 const lanes = [
   { name: "In-flight", color: "#3fb950", desc: "Actively working or thinking." },

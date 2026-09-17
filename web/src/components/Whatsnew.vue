@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import { useEscClose } from "../useEscClose";
 
 const props = defineProps<{ sinceBuild?: number | null }>();
-defineEmits<{ close: [] }>();
+const emit = defineEmits<{ close: [] }>();
+useEscClose(() => emit("close"));
 
 interface Entry {
   build: number | null;

@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
-import type { ActivityState, CostSummary, CostTokens, DiscoveredSession, SessionSource } from "./types.js";
+import type { ActivityState, CostSummary, CostTokens, DiscoveredSession, JiraConfig, JiraTicket, JiraView, SessionSource, Todo } from "./types.js";
 
 interface SessionRow {
   id: string;
@@ -64,6 +65,10 @@ export class Store {
     // table is dropped here, BEFORE the creates below, and refilled by the next scan.
     this.dropIfKeyedById("session_cost");
     this.dropIfKeyedById("session_cost_day");
+    // jira_tickets is a snapshot cache (fully replaced every poll, see replaceJiraTickets) —
+    // its shape changed from the old fixed "QA-status" query to a free-form JQL result, so
+    // an old-shaped table is dropped here rather than migrated column-by-column.
+    this.dropIfHasColumn("jira_tickets", "project");
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS sessions (
@@ -142,6 +147,44 @@ export class Store {
         log_file   TEXT NOT NULL,
         started_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS todos (
+        id         TEXT PRIMARY KEY,
+        text       TEXT NOT NULL,
+        lane       TEXT NOT NULL DEFAULT 'open',
+        position   INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        landed_at  INTEGER
+      );
+      /* Singleton row (id = 1) — a single global Jira connection, not per-repo. api_token
+         is a plain Atlassian API token; it is never sent back to the browser (see
+         Store.getJiraConfig, which reports only hasToken). jql is the query currently
+         being polled — pasted freely by the user, no project/status picker. */
+      CREATE TABLE IF NOT EXISTS jira_config (
+        id         INTEGER PRIMARY KEY CHECK (id = 1),
+        base_url   TEXT NOT NULL DEFAULT '',
+        email      TEXT NOT NULL DEFAULT '',
+        api_token  TEXT NOT NULL DEFAULT '',
+        jql        TEXT NOT NULL DEFAULT '',
+        updated_at INTEGER NOT NULL
+      );
+      /* Named JQL presets — just a shortcut onto jira_config.jql, nothing more. */
+      CREATE TABLE IF NOT EXISTS jira_views (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        jql        TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      /* Snapshot of the current JQL's results, fully replaced on every poll (small dataset,
+         no incremental reconciliation needed — see replaceJiraTickets). */
+      CREATE TABLE IF NOT EXISTS jira_tickets (
+        key        TEXT PRIMARY KEY,
+        summary    TEXT NOT NULL,
+        status     TEXT NOT NULL,
+        assignee   TEXT,
+        url        TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        fetched_at INTEGER NOT NULL
+      );
     `);
     // additive migrations for DBs created before these columns existed
     this.addColumn("project_config", "dev_command", "TEXT");
@@ -150,12 +193,37 @@ export class Store {
     // host of the session's terminal/IDE, remembered while it was alive (see src/open.ts)
     this.addColumn("sessions", "host_kind", "TEXT");
     this.addColumn("sessions", "host_bin", "TEXT");
+
+    // todos gained lanes (see Todo/TodoLane in types.ts) in place of a plain done flag —
+    // backfill any pre-existing done/done_at into the new shape, then drop the old columns.
+    this.addColumn("todos", "lane", "TEXT NOT NULL DEFAULT 'open'");
+    this.addColumn("todos", "position", "INTEGER NOT NULL DEFAULT 0");
+    this.addColumn("todos", "landed_at", "INTEGER");
+    this.addColumn("todos", "note", "TEXT");
+    this.addColumn("todos", "link", "TEXT");
+    if ((this.db.prepare(`PRAGMA table_info(todos)`).all() as { name: string }[]).some((c) => c.name === "done")) {
+      this.db.exec(`UPDATE todos SET lane = 'landed', landed_at = done_at WHERE done = 1`);
+      this.db.exec(`ALTER TABLE todos DROP COLUMN done`);
+      this.db.exec(`ALTER TABLE todos DROP COLUMN done_at`);
+    }
+
+    // jira_config gained a free-form jql column in place of the project-key picker
+    this.addColumn("jira_config", "jql", "TEXT NOT NULL DEFAULT ''");
+    if ((this.db.prepare(`PRAGMA table_info(jira_config)`).all() as { name: string }[]).some((c) => c.name === "project_keys")) {
+      this.db.exec(`ALTER TABLE jira_config DROP COLUMN project_keys`);
+    }
   }
 
   /** drop a cost table still carrying the old id-keyed primary key (see migrate) */
   private dropIfKeyedById(table: string): void {
     const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string; pk: number }[];
     if (cols.some((c) => c.name === "id" && c.pk > 0)) this.db.exec(`DROP TABLE ${table}`);
+  }
+
+  /** drop a table if it still has the given (old-shaped) column — see migrate() */
+  private dropIfHasColumn(table: string, col: string): void {
+    const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (cols.some((c) => c.name === col)) this.db.exec(`DROP TABLE ${table}`);
   }
 
   /** add a column if it isn't already present (SQLite has no IF NOT EXISTS for columns) */
@@ -525,6 +593,164 @@ export class Store {
         },
       ]),
     );
+  }
+
+  /** the personal to-do board — a free-text backlog laned like the session board itself,
+   *  unrelated to any session/aircraft */
+  getTodos(): Todo[] {
+    const rows = this.db.prepare(`SELECT id, text, lane, position, created_at, landed_at, note, link FROM todos ORDER BY lane ASC, position ASC`).all() as {
+      id: string;
+      text: string;
+      lane: string;
+      position: number;
+      created_at: number;
+      landed_at: number | null;
+      note: string | null;
+      link: string | null;
+    }[];
+    return rows.map((r) => ({ id: r.id, text: r.text, lane: r.lane as Todo["lane"], position: r.position, createdAt: r.created_at, landedAt: r.landed_at, note: r.note, link: r.link }));
+  }
+
+  /** new cards start at the end of "open" */
+  addTodo(text: string): Todo {
+    const next = this.db.prepare(`SELECT COALESCE(MAX(position), -1) + 1 AS p FROM todos WHERE lane = 'open'`).get() as { p: number };
+    const todo: Todo = { id: randomUUID(), text, lane: "open", position: next.p, createdAt: Date.now(), landedAt: null, note: null, link: null };
+    this.db
+      .prepare(`INSERT INTO todos (id, text, lane, position, created_at, landed_at) VALUES (?, ?, 'open', ?, ?, NULL)`)
+      .run(todo.id, todo.text, todo.position, todo.createdAt);
+    return todo;
+  }
+
+  setTodoText(id: string, text: string): void {
+    this.db.prepare(`UPDATE todos SET text = ? WHERE id = ?`).run(text, id);
+  }
+
+  setTodoNote(id: string, note: string): void {
+    this.db.prepare(`UPDATE todos SET note = ? WHERE id = ?`).run(note, id);
+  }
+
+  deleteTodoNote(id: string): void {
+    this.db.prepare(`UPDATE todos SET note = NULL WHERE id = ?`).run(id);
+  }
+
+  setTodoLink(id: string, link: string): void {
+    this.db.prepare(`UPDATE todos SET link = ? WHERE id = ?`).run(link, id);
+  }
+
+  deleteTodoLink(id: string): void {
+    this.db.prepare(`UPDATE todos SET link = NULL WHERE id = ?`).run(id);
+  }
+
+  /**
+   * Move (or reorder within) a lane: `orderedIds` is the destination lane's FULL new order,
+   * `id` included — the client computes this from the drop position, so the backend just
+   * writes `position = index` for each of them. Simpler and plenty fast for a personal
+   * board (dozens of cards, not thousands) than tracking fractional positions.
+   */
+  moveTodo(id: string, lane: Todo["lane"], orderedIds: string[]): void {
+    const wasLanded = (this.db.prepare(`SELECT landed_at FROM todos WHERE id = ?`).get(id) as { landed_at: number | null } | undefined)?.landed_at;
+    const landedAt = lane === "landed" ? (wasLanded ?? Date.now()) : null;
+    const setLane = this.db.prepare(`UPDATE todos SET lane = ?, landed_at = ? WHERE id = ?`);
+    const setPosition = this.db.prepare(`UPDATE todos SET position = ? WHERE id = ?`);
+    this.db.transaction(() => {
+      setLane.run(lane, landedAt, id);
+      orderedIds.forEach((cardId, i) => setPosition.run(i, cardId));
+    })();
+  }
+
+  deleteTodo(id: string): void {
+    this.db.prepare(`DELETE FROM todos WHERE id = ?`).run(id);
+  }
+
+  /** Jira config as safe to hand to the browser — the token is never included, only
+   *  whether one is stored (see JiraConfig in types.ts). */
+  getJiraConfig(): JiraConfig | null {
+    const row = this.db.prepare(`SELECT base_url, email, api_token, jql FROM jira_config WHERE id = 1`).get() as
+      | { base_url: string; email: string; api_token: string; jql: string }
+      | undefined;
+    if (!row) return null;
+    return { baseUrl: row.base_url, email: row.email, hasToken: !!row.api_token, jql: row.jql };
+  }
+
+  /** full config INCLUDING the token — for the server's own Jira polling only, never
+   *  exposed over the API (see getJiraConfig for the browser-safe view). */
+  getJiraConfigInternal(): { baseUrl: string; email: string; apiToken: string; jql: string } | null {
+    const row = this.db.prepare(`SELECT base_url, email, api_token, jql FROM jira_config WHERE id = 1`).get() as
+      | { base_url: string; email: string; api_token: string; jql: string }
+      | undefined;
+    if (!row) return null;
+    return { baseUrl: row.base_url, email: row.email, apiToken: row.api_token, jql: row.jql };
+  }
+
+  /** Upsert the Jira connection settings. `apiToken` is optional: omitted/undefined keeps
+   *  the token already on file, so re-saving the URL/email/jql (or the masked "••••" the
+   *  UI shows once a token is stored) never wipes it — only a non-empty new value
+   *  overwrites it. Any field omitted keeps its current value. */
+  setJiraConfig(cfg: { baseUrl?: string; email?: string; apiToken?: string; jql?: string }): void {
+    const existing = this.getJiraConfigInternal();
+    const merged = {
+      baseUrl: cfg.baseUrl ?? existing?.baseUrl ?? "",
+      email: cfg.email ?? existing?.email ?? "",
+      apiToken: cfg.apiToken ? cfg.apiToken : existing?.apiToken ?? "",
+      jql: cfg.jql ?? existing?.jql ?? "",
+    };
+    this.db
+      .prepare(
+        `INSERT INTO jira_config (id, base_url, email, api_token, jql, updated_at)
+         VALUES (1, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET base_url = excluded.base_url, email = excluded.email,
+           api_token = excluded.api_token, jql = excluded.jql, updated_at = excluded.updated_at`,
+      )
+      .run(merged.baseUrl, merged.email, merged.apiToken, merged.jql, Date.now());
+  }
+
+  /** saved JQL presets, newest first */
+  getJiraViews(): JiraView[] {
+    const rows = this.db.prepare(`SELECT id, name, jql, created_at FROM jira_views ORDER BY created_at DESC`).all() as {
+      id: string;
+      name: string;
+      jql: string;
+      created_at: number;
+    }[];
+    return rows.map((r) => ({ id: r.id, name: r.name, jql: r.jql, createdAt: r.created_at }));
+  }
+
+  addJiraView(name: string, jql: string): JiraView {
+    const view: JiraView = { id: randomUUID(), name, jql, createdAt: Date.now() };
+    this.db.prepare(`INSERT INTO jira_views (id, name, jql, created_at) VALUES (?, ?, ?, ?)`).run(view.id, view.name, view.jql, view.createdAt);
+    return view;
+  }
+
+  deleteJiraView(id: string): void {
+    this.db.prepare(`DELETE FROM jira_views WHERE id = ?`).run(id);
+  }
+
+  /** current JQL's results */
+  getJiraTickets(): JiraTicket[] {
+    const rows = this.db.prepare(`SELECT key, summary, status, assignee, url, updated_at FROM jira_tickets ORDER BY updated_at DESC`).all() as {
+      key: string;
+      summary: string;
+      status: string;
+      assignee: string | null;
+      url: string;
+      updated_at: number;
+    }[];
+    return rows.map((r) => ({ key: r.key, summary: r.summary, status: r.status, assignee: r.assignee, url: r.url, updatedAt: r.updated_at }));
+  }
+
+  /** replace the whole snapshot — the poll always returns the full current result set, so
+   *  a full replace (rather than incremental reconciliation) is both simplest and correct. */
+  replaceJiraTickets(tickets: JiraTicket[]): void {
+    const now = Date.now();
+    const tx = this.db.transaction((rows: JiraTicket[]) => {
+      this.db.prepare(`DELETE FROM jira_tickets`).run();
+      const insert = this.db.prepare(
+        `INSERT INTO jira_tickets (key, summary, status, assignee, url, updated_at, fetched_at)
+         VALUES (@key, @summary, @status, @assignee, @url, @updatedAt, @fetchedAt)`,
+      );
+      for (const t of rows) insert.run({ ...t, fetchedAt: now });
+    });
+    tx(tickets);
   }
 
   close(): void {

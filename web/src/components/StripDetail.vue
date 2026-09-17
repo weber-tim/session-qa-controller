@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, ref } from "vue";
 import type { Aircraft } from "../types";
 import { STATE, formatAge, formatTokens, formatUsd, laneOf, devUrl, isParked, LANDED_COLOR, PARKED_COLOR } from "../format";
+import { useEscClose } from "../useEscClose";
 
 const props = defineProps<{ aircraft: Aircraft; now: number }>();
 const emit = defineEmits<{ close: []; open: [id: string] }>();
@@ -18,12 +19,7 @@ function requestClose() {
   if (reduceMotion) emit("close");
   else visible.value = false;
 }
-
-const onKey = (e: KeyboardEvent) => {
-  if (e.key === "Escape") requestClose();
-};
-onMounted(() => window.addEventListener("keydown", onKey));
-onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
+useEscClose(requestClose);
 
 const a = computed(() => props.aircraft);
 // landed / parked are overlays on top of the raw activity state — reflect them in the badge
