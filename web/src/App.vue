@@ -444,7 +444,10 @@ function onOpen(id: string) { open(id); }
         <span v-if="isDev" class="dev-badge" title="Development build (Vite dev server) — not the installed app">DEV</span>
       </div>
       <div class="view-tabs">
-        <button class="view-tab" :class="{ on: view === 'sessions' }" @click="setView('sessions')"><i class="ti ti-plane"></i> Sessions</button>
+        <button class="view-tab" :class="{ on: view === 'sessions' }" @click="setView('sessions')">
+          <i class="ti ti-plane"></i> Sessions
+          <span v-if="holding.length" class="view-tab-badge">{{ holding.length }}</span>
+        </button>
         <button class="view-tab" :class="{ on: view === 'todos' }" @click="setView('todos')">
           <i class="ti ti-checklist"></i> To-Dos
           <span v-if="openTodoCount" class="view-tab-badge">{{ openTodoCount }}</span>
