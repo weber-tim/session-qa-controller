@@ -1,20 +1,22 @@
 <div align="center">
-  <img src="web/public/logo.svg" width="84" alt="Session Controller" />
+  <img src="web/public/logo.svg" width="84" alt="Session Controller logo" />
   <h1>Session Controller</h1>
-  <p><em>A board for the Claude Code sessions you run in parallel.</em></p>
+  <p><strong>A dashboard for running multiple Claude Code sessions in parallel without getting overwhelmed.</strong></p>
+  <p>See every session at a glance, know which one is waiting on you, and jump straight back into it.</p>
   <p>
     <img alt="macOS" src="https://img.shields.io/badge/macOS-06090d?style=for-the-badge&logo=apple&logoColor=white" />
     <img alt="self-updating" src="https://img.shields.io/badge/self--updating-3fb950?style=for-the-badge&labelColor=0d1117&color=3fb950" />
     <img alt="read-only" src="https://img.shields.io/badge/read--only-7d8590?style=for-the-badge&labelColor=0d1117&color=7d8590" />
   </p>
-  <p>
-    <a href="https://buymeacoffee.com/davidsaysthankyou"><img alt="Buy me a coffee" src="https://img.shields.io/badge/Buy_me_a_coffee-davidsaysthankyou-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=0d1117&labelColor=FFDD00" /></a>
-  </p>
 </div>
 
-Every Claude session — in a terminal (Claude Code
-CLI) or the Claude desktop app — is tracked automatically and shown as a live strip.
-It never writes to Claude's files. See [CONCEPT.md](CONCEPT.md) for the full design.
+<p align="center">
+  <img src="docs/screenshots/board.png" alt="Session Controller dashboard showing multiple Claude Code sessions as flight strips across the In-flight, Holding, Parked, MIA and Landed lanes" />
+</p>
+
+Every Claude Code session, in a terminal or the Claude desktop app, shows up on its own as a live
+**flight strip** that moves between lanes as its state changes. It runs locally as a macOS menu-bar
+app and never writes to Claude's files.
 
 ## Install
 
@@ -22,51 +24,78 @@ It never writes to Claude's files. See [CONCEPT.md](CONCEPT.md) for the full des
 curl -fsSL https://raw.githubusercontent.com/DavidMueller1/session-controller/main/install.sh | bash
 ```
 
-Clones into `~/Library/Application Support/Session Controller/repo`, builds an on-device
-menu-bar app, wires the tracking hooks, and adds a Login Item. Because it's built locally
-there's no Gatekeeper prompt. Dashboard: <http://127.0.0.1:4317>.
+This builds the menu-bar app on your Mac, wires the tracking hooks, and adds a Login Item. The
+dashboard runs at <http://127.0.0.1:4317>. You need macOS and [Claude Code](https://code.claude.com);
+the [GitHub CLI](https://cli.github.com) is optional, for PR pills.
 
-## Auto-update
+## Features
 
-The app keeps itself current: it checks `main` shortly after launch and every 30 min (or
-via the menu's *Check for Updates Now*), then silently pulls, rebuilds only what changed,
-and restarts — relaunching itself if the app bundle changed. **Pushing to `main` ships to
-everyone.** Board state (`…/Session Controller/data`) is never touched by an update.
+- **Live status** for every session, driven by Claude Code hooks
+- **Knows who needs you:** strips flash when a session is waiting on your answer, with optional notifications
+- **One click back in:** focuses the exact iTerm2 or Terminal.app tab, JetBrains window, or Claude app,
+  and reopens a closed terminal session with `claude --resume`
+- **Search** by title, branch, or folder (press `/`)
+- **Per strip:** PR status, dev server controls, context usage, and token cost
+
+<p align="center">
+  <img src="docs/screenshots/taxi.gif" width="720" alt="A Claude Code session strip taxiing between lanes as its state changes from working to waiting for input" />
+</p>
 
 ## The board
-
-Strips move between lanes as each session's state changes:
 
 | Lane | Meaning |
 |---|---|
 | ![In-flight](https://img.shields.io/badge/In--flight-3fb950?style=flat-square&labelColor=3fb950&color=3fb950) | working now |
-| ![Holding](https://img.shields.io/badge/Holding-e0a92e?style=flat-square&labelColor=e0a92e&color=e0a92e) | waiting on you — turn ended, or it called `AskUserQuestion` / `ExitPlanMode` (flashes) |
-| ![Parked](https://img.shields.io/badge/Parked-e0823c?style=flat-square&labelColor=e0823c&color=e0823c) | a "needs you" strip you triaged by adding a note |
-| ![MIA](https://img.shields.io/badge/MIA-7d8590?style=flat-square&labelColor=7d8590&color=7d8590) | lost contact — quiet 5+ min, or wrapped up |
+| ![Holding](https://img.shields.io/badge/Holding-e0a92e?style=flat-square&labelColor=e0a92e&color=e0a92e) | waiting on you (flashes) |
+| ![Parked](https://img.shields.io/badge/Parked-e0823c?style=flat-square&labelColor=e0823c&color=e0823c) | waiting on you, set aside with a note |
+| ![MIA](https://img.shields.io/badge/MIA-7d8590?style=flat-square&labelColor=7d8590&color=7d8590) | quiet for 5+ minutes, or wrapped up |
 | ![Landed](https://img.shields.io/badge/Landed-4cc38a?style=flat-square&labelColor=4cc38a&color=4cc38a) | you marked it done |
 
-- Sessions idle **> 5 days drop off** the board — unless they have a note.
-- **Click a strip** for details; **click its title** to focus the session — the exact iTerm2/Terminal.app **tab** it runs in (matched by tty), the matching IDE project window, or the Claude app. For a session that is already gone the board falls back to the host it was last seen in; if that was never recorded it says so instead of guessing an app.
-- ![PR](https://img.shields.io/badge/PR-58a6ff?style=flat-square&labelColor=58a6ff&color=58a6ff) pill per branch (via `gh`), coloured by review state; a merged PR flags ![Approach](https://img.shields.io/badge/Approach-a371f7?style=flat-square&labelColor=a371f7&color=a371f7) (cleared to land). Landing is a manual click.
-- **dev ▾** — detect, start/stop a dev server in the strip's folder and tail its logs; set the command per repo in **Settings**.
-- A **context-usage ring**, header **bell** for holding notifications, and a **?** help panel cover the rest.
+<table>
+  <tr>
+    <td><img src="docs/screenshots/detail.png" alt="Detail view of a Claude Code session with project, branch, model, context usage, cost, pull request and timeline" /></td>
+    <td><img src="docs/screenshots/grid.png" alt="Grid view listing every Claude Code session in the In-flight lane" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Click a strip for its details</sub></td>
+    <td align="center"><sub>Click a lane's name for the grid</sub></td>
+  </tr>
+</table>
 
-## Tracking hooks
+## FAQ
 
-Live state comes from a few Claude Code hooks that write `~/.claude/tc-state/*.json`.
-`install.sh` wires them idempotently (via `pnpm run doctor`). If a Claude update ever
-rewrites `~/.claude/settings.json` and drops them, a banner appears at the top of the
-board — the app re-wires them on its next update, or run `pnpm run doctor`.
+**Does it send my code or conversations anywhere?**
+No. It reads Claude's local session files and runs entirely on your Mac, with no account and no
+telemetry. Its only network calls are the Claude status page, `gh` for PR pills, and updates from
+this repo.
+
+**How does it stay up to date?**
+It installs updates when it launches. While it's running, a banner offers **Update now** when a
+new version is out. Your board (notes, landings) is never touched by an update.
+
+**Strips stopped updating?**
+A Claude update may have removed the tracking hooks. The board shows a banner when that happens;
+run `pnpm run doctor` in the repo to re-wire them.
+
+**What does the cost mean?**
+What your tokens would cost at API list prices. On a Pro or Max plan that isn't what you pay.
 
 ## Develop
 
 ```bash
-nvm use                # Node 22 (from .nvmrc)
-pnpm run setup         # deps + build UI + wire hooks   (NB: `run setup`, not `pnpm setup`)
-pnpm serve             # server + built UI on :4317
-pnpm ui                # Vite dev server on :5173 (HMR), proxies to :4317
-pnpm dev:live          # both of the above against the INSTALLED app's DB — instant changes, same data
+nvm use            # Node 22
+pnpm run setup     # deps, UI build, hooks
+pnpm dev:live      # dev UI with hot reload, using the installed app's data
 pnpm typecheck
+pnpm screenshots   # regenerate docs/screenshots from demo mode (fake data)
 ```
 
-`gh` (GitHub CLI) is optional — only for the PR pills.
+Add `?demo` to the dashboard URL for made-up sessions (`?demo=tour` animates a few lane changes).
+[CONCEPT.md](CONCEPT.md) has the full design.
+
+---
+
+<p align="center">
+  <sub>If Session Controller saves you some tab-hunting:</sub><br />
+  <a href="https://buymeacoffee.com/davidsaysthankyou"><img alt="Buy me a coffee" src="https://img.shields.io/badge/Buy_me_a_coffee-davidsaysthankyou-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=0d1117&labelColor=FFDD00" /></a>
+</p>

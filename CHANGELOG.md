@@ -3,6 +3,21 @@
 What's new in Session Controller — newest first. Surfaced in-app under **What's new**.
 Each entry is tagged with the build it shipped in (the number in the version stamp).
 
+## Build 161 — 2026-09-28
+- Sturdier session tracking: a turn that fails on a rate limit or API error now shows **Needs you** instead of staying In-flight, login and quota notifications no longer make a strip flash, and resumed sessions come back right away.
+
+## Build 160 — 2026-09-28
+- Approving a permission prompt now moves a strip back to In-flight right away, instead of it flashing until Claude's next step.
+
+## Build 155 — 2026-09-28
+- **Costs now include Claude Opus 5.5 sessions**, which were previously counted as $0 and marked with `*`.
+
+## Build 154 — 2026-09-28
+- **Search** — type in the header's scratchpad (or press `/`) to show only the strips whose title, branch, or folder matches.
+
+## Build 153 — 2026-09-17
+- **Board lanes scroll now** — every lane holds any number of strips (In-flight/Landed scroll sideways, the rest vertically), with a soft edge-fade where there's more; click a lane's name to see everything in it as a grid.
+
 ## Build 151 — 2026-09-16
 - **Reopen a closed session** — click a strip whose terminal tab you've closed and it comes back, resuming right where it left off.
 
