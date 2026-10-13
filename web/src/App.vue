@@ -43,12 +43,6 @@ function toggleTodos() {
   if (!todosEnabled.value && view.value === "todos") setView("sessions");
 }
 const openTodoCount = computed(() => todos.value.filter((t) => t.lane !== "landed").length);
-// same shape as the session header's counters, for the header when viewing the to-do board
-const todoCounts = computed(() => {
-  const c = { open: 0, inflight: 0, holding: 0, landed: 0 };
-  for (const t of todos.value) c[t.lane]++;
-  return c;
-});
 onMounted(start);
 
 // Cost readout: today's spend leads (it's the number that changes), the running month
@@ -592,13 +586,6 @@ function onOpen(id: string) { open(id); }
             </span>
           </span>
           </template>
-          <span class="hdr-div" aria-hidden="true"></span>
-        </template>
-        <template v-else>
-          <span class="stat"><FlipCounter :value="todoCounts.open" color="var(--gray)" /> taxiing</span>
-          <span class="stat"><FlipCounter :value="todoCounts.inflight" color="var(--green)" /> in-flight</span>
-          <span class="stat"><FlipCounter :value="todoCounts.holding" color="var(--amber)" /> holding</span>
-          <span v-if="todoCounts.landed" class="stat"><FlipCounter :value="todoCounts.landed" color="#4cc38a" /> landed</span>
           <span class="hdr-div" aria-hidden="true"></span>
         </template>
         <button class="bell wn-btn" data-tip="WHAT'S NEW" aria-label="What's new" @click="whatsnewOpen = true">

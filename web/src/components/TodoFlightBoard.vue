@@ -35,6 +35,7 @@ const openL = computed(() => byLane("open"));
 const inflight = computed(() => byLane("inflight"));
 const holding = computed(() => byLane("holding"));
 const landed = computed(() => byLane("landed"));
+const laneCount = computed<Record<TodoLane, number>>(() => ({ open: openL.value.length, inflight: inflight.value.length, holding: holding.value.length, landed: landed.value.length }));
 
 const stage = ref<HTMLElement | null>(null);
 const skyW = ref(1400);
@@ -498,7 +499,7 @@ function onSetLane(id: string, lane: TodoLane) {
       <div v-for="(c, i) in corridors" :key="'c' + i" class="corridor" :style="{ transform: `translate(${c.x}px, ${c.y}px)`, width: c.w + 'px', height: c.h + 'px', borderRadius: c.radius }"></div>
       <svg class="taxi-svg" :viewBox="`0 0 ${skyW} ${skyH}`" preserveAspectRatio="none"><path :d="taxiPath" /></svg>
 
-      <div v-for="z in zones" :key="z.k" class="lane-label" :style="{ transform: `translate(${z.x}px, ${z.y}px)`, width: LABEL_W + 'px', height: z.h + 'px', color: z.c }"><span>{{ z.label }}</span></div>
+      <div v-for="z in zones" :key="z.k" class="lane-label" :style="{ transform: `translate(${z.x}px, ${z.y}px)`, width: LABEL_W + 'px', height: z.h + 'px', color: z.c }"><span>{{ z.label }}<span class="lane-count">{{ laneCount[z.k] }}</span></span></div>
 
       <!-- "add a task" tile — always the first slot in the Taxiing column, styled like a
            card (spine + rounded shell) but dashed, so it reads as the add affordance -->
@@ -591,6 +592,10 @@ function onSetLane(id: string, lane: TodoLane) {
 .taxi-svg path { fill: none; stroke: #d9a441; stroke-width: 1.5; stroke-linecap: round; opacity: 0.3; }
 .lane-label { position: absolute; top: 0; left: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 3; }
 .lane-label span { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 10px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; color: currentColor; white-space: nowrap; }
+/* same lane count as the session board's FlightBoard: out of flow so the centred name never shifts */
+.lane-label span { position: relative; }
+.lane-label .lane-count { position: absolute; inset-inline-start: 100%; inset-block-start: 0; writing-mode: inherit; transform: none; font-variant-numeric: tabular-nums; letter-spacing: 0.5px; }
+.lane-label .lane-count::before { content: "·"; margin-inline: 5px; }
 .slot { position: absolute; top: 0; left: 0; overflow: hidden; z-index: 2; cursor: grab; }
 .slot :deep(.todo-card) { height: 100%; transition: opacity 0.18s ease; }
 .puck { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; border-radius: 8px; background: color-mix(in srgb, var(--puck, #7d8590) 22%, var(--strip)); border: 1px solid color-mix(in srgb, var(--puck, #7d8590) 55%, transparent); opacity: 0; pointer-events: none; }
