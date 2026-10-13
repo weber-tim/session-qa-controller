@@ -15,8 +15,15 @@ interface RepoRow extends Cfg {
 }
 
 const GLOBAL_KEY = "__global__";
-defineProps<{ flight: boolean; notifySupported: boolean; notifyEnabled: boolean; version?: string }>();
-const emit = defineEmits<{ close: []; toggleFlight: []; toggleNotify: [] }>();
+/** per Claude account: whether its PLAN / API header sections show (tag = null for the default login) */
+interface SectionPref {
+  id: string;
+  tag: string | null;
+  plan: boolean;
+  api: boolean;
+}
+defineProps<{ flight: boolean; notifySupported: boolean; notifyEnabled: boolean; sections: SectionPref[]; version?: string }>();
+const emit = defineEmits<{ close: []; toggleFlight: []; toggleNotify: []; toggleSection: [kind: "plan" | "api", id: string] }>();
 useEscClose(() => emit("close"));
 
 // App controls (moved out of the native menu). These queue a command the menu-bar app runs
@@ -41,6 +48,24 @@ function toggleOverlay() {
   overlayShown.value = !overlayShown.value; // optimistic; reconciled below
   appCmd("overlay-toggle");
   setTimeout(loadAppState, 1600);
+}
+// Server-side so it also lands strips while no board is open.
+const autoLand = ref(false);
+async function loadSettings() {
+  try {
+    autoLand.value = !!(await (await fetch("/api/settings")).json()).autoLand;
+  } catch {
+    /* leave as-is */
+  }
+}
+async function toggleAutoLand() {
+  autoLand.value = !autoLand.value;
+  try {
+    const r = await fetch("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ autoLand: autoLand.value }) });
+    autoLand.value = !!(await r.json()).autoLand;
+  } catch {
+    autoLand.value = !autoLand.value;
+  }
 }
 // "Check now" with real feedback: ask the server to fetch the branch → if there's an update,
 // trigger it (the app applies + restarts, and the board auto-reloads); otherwise say so.
@@ -86,6 +111,7 @@ function quitApp() {
   if (confirm("Quit Session Controller? The menu-bar app and its server will exit.")) appCmd("quit");
 }
 onMounted(loadAppState);
+onMounted(loadSettings);
 
 const repos = ref<RepoRow[]>([]);
 const globals = ref<Cfg>({ urlTemplate: "", command: "", install: "", env: "" });
@@ -189,6 +215,26 @@ const saveGlobal = () => put(GLOBAL_KEY, null, globals.value);
             <i class="ti" :class="notifyEnabled ? 'ti-bell' : 'ti-bell-off'"></i> {{ notifyEnabled ? "On" : "Off" }}
           </button>
         </div>
+        <div class="s-pref">
+          <span class="s-plabel">Auto-land when the PR is merged</span>
+          <button class="s-toggle" :class="{ on: autoLand }" @click="toggleAutoLand">
+            <i class="ti" :class="autoLand ? 'ti-plane-arrival' : 'ti-plane-off'"></i> {{ autoLand ? "On" : "Off" }}
+          </button>
+        </div>
+        <template v-for="sec in sections" :key="sec.id">
+          <div class="s-pref">
+            <span class="s-plabel">Show plan usage<span v-if="sec.tag" class="s-acct">{{ sec.tag }}</span></span>
+            <button class="s-toggle" :class="{ on: sec.plan }" @click="emit('toggleSection', 'plan', sec.id)">
+              <i class="ti" :class="sec.plan ? 'ti-eye' : 'ti-eye-off'"></i> {{ sec.plan ? "On" : "Off" }}
+            </button>
+          </div>
+          <div class="s-pref">
+            <span class="s-plabel">Show API costs<span v-if="sec.tag" class="s-acct">{{ sec.tag }}</span></span>
+            <button class="s-toggle" :class="{ on: sec.api }" @click="emit('toggleSection', 'api', sec.id)">
+              <i class="ti" :class="sec.api ? 'ti-eye' : 'ti-eye-off'"></i> {{ sec.api ? "On" : "Off" }}
+            </button>
+          </div>
+        </template>
       </div>
 
       <div class="s-sep">app</div>
@@ -325,6 +371,7 @@ const saveGlobal = () => put(GLOBAL_KEY, null, globals.value);
 </template>
 
 <style scoped>
+.s-acct { margin-left: 7px; color: var(--acct); box-shadow: inset 0 0 0 0.5px var(--acct); border-radius: 4px; padding: 0 5px; font: 600 9.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.06em; }
 .s-overlay { position: fixed; inset: 0; z-index: 60; background: rgba(6, 9, 13, 0.66); display: flex; align-items: center; justify-content: center; padding: 32px; }
 .s-panel { width: min(720px, 94vw); max-height: 82vh; display: flex; flex-direction: column; background: var(--panel); border: 0.5px solid var(--border); border-radius: 12px; box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5); overflow: hidden; }
 .s-h { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 0.5px solid var(--border-soft); font-size: 13px; font-weight: 500; color: var(--text); }

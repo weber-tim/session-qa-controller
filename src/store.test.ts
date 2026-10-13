@@ -131,3 +131,18 @@ test("re-recording one transcript leaves its sibling transcripts untouched", () 
   assert.equal(s.costSummary("2026-09-15").month, 15);
   assert.equal(s.costSummary("2026-09-15").today, 15);
 });
+
+test("carries a strip's auto-land record over to its compacted continuation", () => {
+  const s = tmpStore();
+  s.setAutoLanded("old", "pr#7");
+  s.reassign("old", "new");
+  assert.equal(s.getAutoLanded().get("new"), "pr#7");
+  assert.equal(s.getAutoLanded().has("old"), false);
+});
+
+test("sums an account's spend from its own projects dir only", () => {
+  const s = tmpStore();
+  s.recordCost([row({ id: "w", path: "/h/.claude/projects/p/w.jsonl" }), row({ id: "p", path: "/h/.claude-privat/projects/p/p.jsonl", byDay: { "2026-09-15": 3 } })]);
+  assert.equal(s.costSummary("2026-09-15", "/h/.claude/projects/").today, 1);
+  assert.equal(s.costSummary("2026-09-15", "/h/.claude-privat/projects/").today, 3);
+});

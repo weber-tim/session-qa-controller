@@ -279,6 +279,8 @@ export interface DiscoveredSession {
   costByDay?: Record<string, number>;
   /** this session ran on a model with no price entry — `costUsd` is a lower bound */
   costUnpriced?: boolean;
+  /** the Claude account (config dir) it runs under — "default" for ~/.claude (see accounts.ts) */
+  account?: string;
   /** PR for the branch (via gh), attached by branch. null = none/unknown */
   pr?: PrInfo | null;
   /** merged-PR overlay (added by the server's decorate). Drives the Approach lane. */
@@ -300,6 +302,9 @@ export interface DiscoveredSession {
   /** CLI: predecessor session this transcript continued from after a `/compact` (raw link
    *  from the transcript). Used by correlate to supersede the old session. */
   continuedFrom?: string | null;
+  /** the Claude desktop app's own id for this session (`local_…`), when the desktop app has it —
+   *  lets a click open exactly this session there (claude://code/continue) */
+  desktopSessionId?: string | null;
   /** predecessor session ids this aircraft supersedes (a compaction chain, newest-last
    *  excluded). Set by correlate; the server folds their note/landed onto this flight. */
   supersedes?: string[];

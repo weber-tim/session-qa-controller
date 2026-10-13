@@ -3,6 +3,7 @@ import path from "node:path";
 import staticPlugin from "@fastify/static";
 import websocket from "@fastify/websocket";
 import Fastify from "fastify";
+import { ACCOUNTS, DEFAULT_ACCOUNT, accountById } from "./accounts.js";
 import { CONFIG } from "./config.js";
 import { DevRunner } from "./devRunner.js";
 import { DevServerScanner } from "./devServers.js";
@@ -17,6 +18,7 @@ import { Store } from "./store.js";
 import type { ActivityState, AnthropicStatus, CostSummary, DevServerInfo, DiscoveredSession, HooksHealth, JiraTicket } from "./types.js";
 import { type UpdateStatus, checkForUpdate, getVersion } from "./version.js";
 import { readChangelog } from "./changelog.js";
+import { type PlanUsage, fetchPlanUsage } from "./planUsage.js";
 
 /** the ws socket type, sourced from @fastify/websocket to avoid importing ws directly */
 type WebSocket = import("@fastify/websocket").WebSocket;
@@ -65,6 +67,9 @@ async function main(): Promise<void> {
   // backfill fills in everything older than the engine's staleness window (once at start,
   // then on a slow repeat). The board shows today and the running month from the ledger,
   // so both are right even for sessions that have long since dropped off the board.
+  // one summary per account (its own projects dir); `costSummary` is the default account's
+  let costScanned = false;
+  let costByAccount: Record<string, CostSummary> = {};
   let costSummary: CostSummary = { today: 0, month: 0, unpricedSessions: 0, scanned: false };
   let costById = store.costById();
 
@@ -76,12 +81,13 @@ async function main(): Promise<void> {
   };
 
   const refreshCost = () => {
-    const scanned = costSummary.scanned;
-    costSummary = { ...store.costSummary(localToday()), scanned };
+    const day = localToday();
+    costByAccount = Object.fromEntries(ACCOUNTS.map((a) => [a.id, { ...store.costSummary(day, a.projectsDir + path.sep), scanned: costScanned }]));
+    costSummary = costByAccount[DEFAULT_ACCOUNT];
     costById = store.costById();
   };
 
-  const costMsg = () => ({ type: "cost", ts: Date.now(), cost: costSummary });
+  const costMsg = () => ({ type: "cost", ts: Date.now(), cost: costSummary, accounts: costByAccount });
 
   /** write the live sessions' running totals into the ledger */
   const recordLiveCost = (list: DiscoveredSession[]) => {
@@ -194,8 +200,8 @@ async function main(): Promise<void> {
   const runCostScan = () => {
     scanCosts(store)
       .then((r) => {
-        costSummary = { ...store.costSummary(localToday()), scanned: true };
-        costById = store.costById();
+        costScanned = true;
+        refreshCost();
         broadcast(costMsg());
         if (r.priced) process.stdout.write(`[cost] priced ${r.priced} transcript(s), skipped ${r.skipped}\n`);
       })
@@ -420,6 +426,29 @@ async function main(): Promise<void> {
     if (changed) landed = new Set(store.getLanded());
   }
 
+  // Auto-land (opt-in): a strip lands once its PR is merged and it isn't working. Each trigger
+  // lands it only once, so after an unland (by hand, or by working again) it stays put until a
+  // new trigger comes along.
+  let autoLand = store.getSetting("autoLand") === "1";
+  let autoLanded = store.getAutoLanded();
+  function autoLandMerged(list: DiscoveredSession[]): boolean {
+    if (!autoLand) return false;
+    let changed = false;
+    for (const a of list) {
+      if (a.pr?.state !== "MERGED" || a.state === "working") continue;
+      const trigger = `pr#${a.pr.number}`;
+      if (autoLanded.get(a.id) === trigger) continue;
+      store.setAutoLanded(a.id, trigger);
+      autoLanded.set(a.id, trigger);
+      if (!landed.has(a.id)) {
+        store.setLanded(a.id);
+        changed = true;
+      }
+    }
+    if (changed) landed = new Set(store.getLanded());
+    return changed;
+  }
+
   // Remember each live terminal session's host (iTerm/Terminal/…) while it's running, so a
   // click after its tab is closed can reopen + `claude --resume` it. Detection walks the pid's
   // process tree, so it only works while alive — we do it once per session (guarded), lazily.
@@ -452,14 +481,16 @@ async function main(): Promise<void> {
     if (reassigned) {
       notes = store.getNotes();
       landed = new Set(store.getLanded());
+      autoLanded = store.getAutoLanded();
       syncKeepIds();
     }
     autoUnlandOnWork(list);
+    autoLandMerged(list);
     recordLiveCost(list);
-    const prevCost = costSummary;
+    const prevCost = JSON.stringify(costByAccount);
     refreshCost();
     broadcast({ type: "update", ts: Date.now(), aircraft: fullList() });
-    if (costSummary.month !== prevCost.month || costSummary.today !== prevCost.today) broadcast(costMsg());
+    if (JSON.stringify(costByAccount) !== prevCost) broadcast(costMsg());
     refreshHealth();
     const summary = Object.entries(counts(list))
       .map(([k, v]) => `${k} ${v}`)
@@ -496,6 +527,31 @@ async function main(): Promise<void> {
   setTimeout(() => void refreshUpdate(), 20_000);
   const updateTimer = setInterval(() => void refreshUpdate(), 20 * 60_000);
   app.get("/api/version", async () => ({ ...version, updateAvailable: updateStatus.available, latest: updateStatus.latest }));
+
+  // Plan usage (the subscription's weekly limit), asked from Claude Code every 5 min. A failed
+  // ask keeps the last good value rather than blanking the header.
+  // One ask per account, each with its own config dir.
+  const planByAccount: Record<string, PlanUsage | null> = Object.fromEntries(ACCOUNTS.map((a) => [a.id, null]));
+  let planInFlight = false;
+  const planMsg = () => ({ type: "plan", ts: Date.now(), plan: planByAccount[DEFAULT_ACCOUNT], accounts: planByAccount });
+  const refreshPlan = async () => {
+    if (planInFlight) return;
+    planInFlight = true;
+    try {
+      let changed = false;
+      for (const a of ACCOUNTS) {
+        const next = await fetchPlanUsage(a.id === DEFAULT_ACCOUNT ? undefined : a.dir);
+        if (!next) continue;
+        planByAccount[a.id] = next;
+        changed = true;
+      }
+      if (changed) broadcast(planMsg());
+    } finally {
+      planInFlight = false;
+    }
+  };
+  setTimeout(() => void refreshPlan(), 5_000);
+  const planTimer = setInterval(() => void refreshPlan(), 5 * 60_000);
   // On-demand check (Settings → App "Check now"): fetch the branch now and report the result
   // so the web can show real feedback, rather than the 20-min background poll.
   app.post("/api/check", async () => {
@@ -597,6 +653,16 @@ async function main(): Promise<void> {
     landed = new Set(store.getLanded());
     pushUpdate();
     return { ok: true, id: req.params.id, landed: false };
+  });
+
+  app.get("/api/settings", async () => ({ autoLand }));
+  app.put<{ Body: { autoLand?: boolean } }>("/api/settings", async (req) => {
+    if (typeof req.body?.autoLand === "boolean") {
+      autoLand = req.body.autoLand;
+      store.setSetting("autoLand", autoLand ? "1" : "0");
+      if (autoLandMerged(engine.aircraft())) pushUpdate();
+    }
+    return { autoLand };
   });
 
   // repos the tower has strips for, with their per-repo config — drives the Settings modal
@@ -757,6 +823,8 @@ async function main(): Promise<void> {
         knownHost: store.getHost(a.id),
         // reopen closed terminal tabs by resuming the transcript (cli sessions only)
         resumeId: surfaces.includes("cli") ? a.id : null,
+        configDir: a.account && a.account !== DEFAULT_ACCOUNT ? (accountById(a.account)?.dir ?? null) : null,
+        desktopSessionId: a.desktopSessionId ?? reg?.hostSessionId ?? null,
       });
       // remember a freshly detected host, so a click on this strip still lands in the
       // right app once the session (and its registry entry) is gone
@@ -774,6 +842,7 @@ async function main(): Promise<void> {
     socket.send(JSON.stringify({ type: "status", ts: Date.now(), status: anthropicStatus }));
     socket.send(JSON.stringify({ type: "health", ts: Date.now(), health: hooksHealth }));
     socket.send(JSON.stringify(costMsg()));
+    socket.send(JSON.stringify(planMsg()));
     socket.send(JSON.stringify(versionMsg()));
     socket.send(JSON.stringify(todosMsg()));
     socket.send(JSON.stringify(jiraMsg()));
@@ -806,6 +875,7 @@ async function main(): Promise<void> {
     clearInterval(healthTimer);
     clearInterval(devTimer);
     clearInterval(updateTimer);
+    clearInterval(planTimer);
     clearInterval(costScanTimer);
     clearInterval(jiraTimer);
     await engine.stop();

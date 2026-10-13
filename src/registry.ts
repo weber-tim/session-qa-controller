@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { CONFIG } from "./config.js";
+import { ACCOUNTS } from "./accounts.js";
 
 /**
  * An entry from the live CLI session registry (~/.claude/sessions/<pid>.json). Only
@@ -18,6 +18,8 @@ export interface RegistryEntry {
    *  recency comparisons — an interrupt flips this to the idle time. Null if absent. */
   statusUpdatedAt: number | null;
   entrypoint: string | null;
+  /** the Claude desktop app's id for a session it hosts (`local_…`) */
+  hostSessionId: string | null;
   pid: number | null;
   cwd: string | null;
   /** file mtime — when Claude Code last wrote this entry; used to tell whether the
@@ -26,7 +28,7 @@ export interface RegistryEntry {
 }
 
 export function isRegistryFile(p: string): boolean {
-  return p.startsWith(CONFIG.sessionsDir + path.sep) && p.endsWith(".json");
+  return p.endsWith(".json") && ACCOUNTS.some((a) => p.startsWith(a.sessionsDir + path.sep));
 }
 
 export async function parseRegistryFile(filePath: string): Promise<RegistryEntry | null> {
@@ -56,6 +58,7 @@ export async function parseRegistryFile(filePath: string): Promise<RegistryEntry
     status: typeof o.status === "string" ? o.status : null,
     statusUpdatedAt: typeof o.statusUpdatedAt === "number" ? o.statusUpdatedAt : null,
     entrypoint: typeof o.entrypoint === "string" ? o.entrypoint : null,
+    hostSessionId: typeof o.hostSessionId === "string" ? o.hostSessionId : null,
     pid: typeof o.pid === "number" ? o.pid : null,
     cwd: typeof o.cwd === "string" ? o.cwd : null,
     mtimeMs,

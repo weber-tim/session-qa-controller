@@ -3,6 +3,25 @@
 What's new in Session Controller — newest first. Surfaced in-app under **What's new**.
 Each entry is tagged with the build it shipped in (the number in the version stamp).
 
+## Build 167 — 2026-10-09
+- **A second Claude login** (a `~/.claude-<name>` config dir, e.g. run via `CLAUDE_CONFIG_DIR` in its own terminal profile) is tracked too: its strips carry a tag with its name, and Settings can show its own PLAN and API in the header.
+
+## Build 166 — 2026-10-06
+- Renaming a session while Claude is working no longer leaves its strip stuck In-flight after the turn ends.
+
+## Build 165 — 2026-10-06
+- **Auto-land** (Settings): strips land on their own once their PR is merged. Unlanding still works as before: by hand, or automatically when the session starts working again.
+
+## Build 164 — 2026-10-05
+- Clicking a desktop-app session now opens exactly that session in the Claude app, instead of just bringing the app to the front.
+
+## Build 163 — 2026-10-05
+- The header clock is now a split-flap display, in 24-hour time.
+
+## Build 162 — 2026-10-01
+- **Plan usage** in the header: see how much of your Claude plan's weekly limit is used, next to any extra credits, and the cost displays are now labelled **API**. Without a plan, the section gets a NO PLAN sticker. Either section can be hidden in Settings.
+- Lane counts moved from the header onto the lane names.
+
 ## Build 161 — 2026-09-28
 - Sturdier session tracking: a turn that fails on a rate limit or API error now shows **Needs you** instead of staying In-flight, login and quota notifications no longer make a strip flash, and resumed sessions come back right away.
 

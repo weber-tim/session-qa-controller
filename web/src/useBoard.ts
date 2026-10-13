@@ -1,7 +1,7 @@
 import { ref, shallowRef } from "vue";
-import { createDemo, demoCost, isDemo, isDemoTour } from "./demo";
+import { createDemo, demoCost, demoPlan, isDemo, isDemoTour } from "./demo";
 import { isFlashing, projectName } from "./format";
-import type { Aircraft, AnthropicStatus, CostSummary, HooksHealth, JiraPollStatus, JiraTicket, Todo, TodoLane, WsMessage } from "./types";
+import type { Aircraft, AnthropicStatus, CostSummary, HooksHealth, JiraPollStatus, JiraTicket, PlanUsage, Todo, TodoLane, WsMessage } from "./types";
 
 /** how long a strip must stay in holding before we notify. 0 = fire immediately.
  *  (A larger value would suppress the session you're actively replying to.) */
@@ -19,6 +19,10 @@ export function useBoard(opts: { notify?: boolean } = {}) {
   const status = ref<AnthropicStatus | null>(null);
   const health = ref<HooksHealth | null>(null);
   const cost = ref<CostSummary | null>(null);
+  const plan = ref<PlanUsage | null>(null);
+  // the same, per Claude account (cost/plan above are the default account's)
+  const costs = ref<Record<string, CostSummary>>({});
+  const plans = ref<Record<string, PlanUsage | null>>({});
   const connected = ref(false);
   const now = ref(Date.now());
   // build version (for the bottom stamp) + whether the tracked branch is ahead (banner)
@@ -157,6 +161,10 @@ export function useBoard(opts: { notify?: boolean } = {}) {
         health.value = msg.health;
       } else if (msg.type === "cost") {
         cost.value = msg.cost;
+        costs.value = msg.accounts ?? { default: msg.cost };
+      } else if (msg.type === "plan") {
+        plan.value = msg.plan;
+        plans.value = msg.accounts ?? { default: msg.plan };
       } else if (msg.type === "version") {
         version.value = msg.current?.pretty ?? "";
         currentBuild.value = msg.current?.build ?? null;
@@ -181,6 +189,9 @@ export function useBoard(opts: { notify?: boolean } = {}) {
     if (demo) {
       connected.value = true;
       cost.value = demoCost;
+      plan.value = demoPlan;
+      costs.value = { default: demoCost };
+      plans.value = { default: demoPlan };
       demoRefresh();
       if (isDemoTour) setInterval(() => (demo.tourStep(), demoRefresh()), 3500);
       setInterval(() => (now.value = Date.now()), 5000);
@@ -311,5 +322,5 @@ export function useBoard(opts: { notify?: boolean } = {}) {
     }
   }
 
-  return { aircraft, status, health, cost, connected, now, version, currentBuild, update, updating, applyUpdate, start, setNote, removeNote, land, unland, open, openHint, notifySupported, notifyEnabled, toggleNotify, todos, addTodo, moveTodo, deleteTodo, setTodoText, setTodoNote, removeTodoNote, setTodoLink, removeTodoLink, jiraTickets, jiraStatus };
+  return { aircraft, status, health, cost, plan, costs, plans, connected, now, version, currentBuild, update, updating, applyUpdate, start, setNote, removeNote, land, unland, open, openHint, notifySupported, notifyEnabled, toggleNotify, todos, addTodo, moveTodo, deleteTodo, setTodoText, setTodoNote, removeTodoNote, setTodoLink, removeTodoLink, jiraTickets, jiraStatus };
 }
