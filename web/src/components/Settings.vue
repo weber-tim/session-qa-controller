@@ -22,8 +22,8 @@ interface SectionPref {
   plan: boolean;
   api: boolean;
 }
-defineProps<{ flight: boolean; notifySupported: boolean; notifyEnabled: boolean; sections: SectionPref[]; version?: string }>();
-const emit = defineEmits<{ close: []; toggleFlight: []; toggleNotify: []; toggleSection: [kind: "plan" | "api", id: string] }>();
+defineProps<{ flight: boolean; todosEnabled: boolean; notifySupported: boolean; notifyEnabled: boolean; sections: SectionPref[]; version?: string }>();
+const emit = defineEmits<{ close: []; toggleFlight: []; toggleTodos: []; toggleNotify: []; toggleSection: [kind: "plan" | "api", id: string] }>();
 useEscClose(() => emit("close"));
 
 // App controls (moved out of the native menu). These queue a command the menu-bar app runs
@@ -208,6 +208,12 @@ const saveGlobal = () => put(GLOBAL_KEY, null, globals.value);
             <button :class="{ on: flight }" @click="flight || emit('toggleFlight')"><i class="ti ti-plane"></i> Board</button>
             <button :class="{ on: !flight }" @click="!flight || emit('toggleFlight')"><i class="ti ti-layout-list"></i> List</button>
           </div>
+        </div>
+        <div class="s-pref">
+          <span class="s-plabel">To-Do board</span>
+          <button class="s-toggle" :class="{ on: todosEnabled }" @click="emit('toggleTodos')">
+            <i class="ti" :class="todosEnabled ? 'ti-checklist' : 'ti-eye-off'"></i> {{ todosEnabled ? "On" : "Off" }}
+          </button>
         </div>
         <div v-if="notifySupported" class="s-pref">
           <span class="s-plabel">Notify when a session needs you</span>

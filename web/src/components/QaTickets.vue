@@ -71,6 +71,8 @@ async function deleteSelectedView() {
   selectedViewId.value = "";
 }
 
+// the backend fetches at most 100 results (src/jira.ts), so a full page reads as "100+"
+const ticketCount = computed(() => (props.tickets.length >= 100 ? "100+" : String(props.tickets.length)));
 const age = (t: JiraTicket) => formatAge(props.now - t.updatedAt);
 // "checked Xs ago" — every poll (background timer or a manual "Suchen") updates this
 const checkedAgo = computed(() => (props.status?.checkedAt ? formatAge(props.now - props.status.checkedAt) : null));
@@ -81,7 +83,7 @@ const checkedAgo = computed(() => (props.status?.checkedAt ? formatAge(props.now
     <div class="qa-overlay" @click.self="emit('close')">
       <div class="qa-panel">
         <div class="qa-h">
-          <span><i class="ti ti-bug"></i> Jira-Tickets</span>
+          <span><i class="ti ti-brand-jira"></i> Jira-Tickets <span v-if="status?.ok && status.checkedAt" class="qa-count">{{ ticketCount }}</span></span>
           <span v-if="checkedAgo" class="qa-checked">zuletzt geprüft vor {{ checkedAgo }}</span>
           <button class="icon" aria-label="close" @click="emit('close')"><i class="ti ti-x"></i></button>
         </div>
@@ -133,6 +135,7 @@ const checkedAgo = computed(() => (props.status?.checkedAt ? formatAge(props.now
 .qa-overlay { position: fixed; inset: 0; z-index: 60; background: rgba(6, 9, 13, 0.66); display: flex; align-items: center; justify-content: center; padding: 32px; }
 .qa-panel { width: min(920px, 94vw); max-height: 82vh; display: flex; flex-direction: column; background: var(--panel); border: 0.5px solid var(--border); border-radius: 12px; box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5); overflow: hidden; }
 .qa-h { flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 0.5px solid var(--border-soft); font-size: 13px; font-weight: 500; color: var(--text); }
+.qa-count { margin-left: 4px; padding: 0 6px; border-radius: 8px; font-size: 11px; font-weight: 500; background: rgba(255, 255, 255, 0.08); color: var(--text-dim); }
 .qa-checked { margin-left: auto; font-size: 11px; font-weight: 400; color: var(--text-faint); }
 .qa-h .icon { all: unset; cursor: pointer; display: inline-flex; padding: 4px; border-radius: 6px; color: var(--text-faint); font-size: 15px; }
 .qa-h .icon:hover { background: rgba(255, 255, 255, 0.08); color: var(--text-dim); }
