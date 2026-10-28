@@ -54,6 +54,12 @@ export const CONFIG = {
   // invisible (exact live state comes from the fast hook/registry dirs above), so poll them
   // less often to cut the recursive-walk + stat cost.
   filePollMs: 5_000,
+  /** The desktop session dirs are NOT walked recursively: each session folder carries its own
+   *  outputs/uploads/plugins/skills tree (tens of thousands of dirs after a few months), and a
+   *  full walk every filePollMs took ~4 s of CPU — the app's whole battery drain. We walk by
+   *  layout instead and only re-list an idle session's `.claude/projects` this often (its
+   *  known transcripts are still stat'ed every poll, so a resumed session shows up at once). */
+  desktopRewalkMs: 10 * 60_000,
 
   /** API server (Phase 2) */
   apiPort: Number(process.env.PORT ?? 4317),

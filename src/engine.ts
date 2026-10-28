@@ -359,6 +359,48 @@ export class Engine extends EventEmitter {
     return roots.some((r) => p === r || p.startsWith(r.endsWith(path.sep) ? r : r + path.sep));
   }
 
+  /** transcripts last listed per desktop session folder, so an idle one isn't re-walked every poll */
+  private desktopListing = new Map<string, { at: number; files: string[] }>();
+
+  /**
+   * List a desktop session root by its known layout instead of walking it recursively:
+   * `<org>/<user>/local_<id>.json` plus each session folder's `<session>/.claude/projects/**.jsonl`.
+   * Everything else in a session folder (outputs, uploads, plugins, skills, …) is skipped —
+   * that's where the tens of thousands of dirs live. A session folder's projects tree is
+   * re-listed every poll while one of its transcripts is recent (new /clear or subagent files
+   * appear there), and only every desktopRewalkMs once it's idle.
+   */
+  private async listDesktopRoot(root: string): Promise<string[]> {
+    const now = Date.now();
+    const dirents = (d: string) => fs.readdir(d, { withFileTypes: true }).catch(() => []);
+    const subdirs = async (d: string) => (await dirents(d)).filter((e) => e.isDirectory()).map((e) => path.join(d, e.name));
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const org of await subdirs(root)) {
+      for (const user of await subdirs(org)) {
+        await Promise.all(
+          (await dirents(user)).map(async (e) => {
+            const p = path.join(user, e.name);
+            if (e.isFile()) return void out.push(p);
+            if (!e.isDirectory()) return;
+            seen.add(p);
+            const cached = this.desktopListing.get(p);
+            const active = cached?.files.some((f) => now - (this.fileMeta.get(f)?.mtimeMs ?? 0) < CONFIG.desktopRewalkMs);
+            // an empty listing is re-checked every poll: a brand-new session writes its first transcript seconds after the folder appears
+            if (cached && cached.files.length && !active && now - cached.at < CONFIG.desktopRewalkMs) return void out.push(...cached.files);
+            const projects = path.join(p, ".claude", "projects");
+            const entries = ((await fs.readdir(projects, { recursive: true } as any).catch(() => [])) as string[]).map((f) => path.join(projects, f));
+            const files = entries.filter(isCliTranscript);
+            this.desktopListing.set(p, { at: now, files });
+            out.push(...files);
+          }),
+        );
+      }
+    }
+    for (const k of [...this.desktopListing.keys()]) if (k.startsWith(root + path.sep) && !seen.has(k)) this.desktopListing.delete(k);
+    return out;
+  }
+
   /**
    * Poll a set of source dirs: enumerate matching files, upsert each (the stat-guard makes
    * unchanged files free and reads are incremental), then forget anything we tracked under
@@ -370,15 +412,15 @@ export class Engine extends EventEmitter {
     const present = new Set<string>();
     await Promise.all(
       roots.map(async (dir) => {
-        let entries: string[];
+        let files: string[];
         try {
-          entries = await fs.readdir(dir, { recursive: true } as any);
+          files = CONFIG.desktopSessionDirs.includes(dir)
+            ? await this.listDesktopRoot(dir)
+            : ((await fs.readdir(dir, { recursive: true } as any)) as string[]).map((e) => path.join(dir, e));
         } catch {
           return; // dir may not exist (e.g. desktop app never used)
         }
-        const targets = entries
-          .map((e) => path.join(dir, e))
-          .filter((p) => isCliTranscript(p) || isDesktopSessionFile(p) || isRegistryFile(p) || isHookStateFile(p));
+        const targets = files.filter((p) => isCliTranscript(p) || isDesktopSessionFile(p) || isRegistryFile(p) || isHookStateFile(p));
         for (const p of targets) present.add(p);
         await Promise.all(targets.map((p) => this.upsert(p)));
       }),
